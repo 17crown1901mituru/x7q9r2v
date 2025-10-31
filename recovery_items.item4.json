@@ -1,0 +1,257 @@
+{
+  "meta": {
+    "source": "item4.txt",
+    "extracted_at": "2025-10-29T14:39:00+09:00",
+    "description": "単車の虎・回復アイテム辞書",
+    "notes": "item.txtから抽出された回復アイテム一覧。HP減少状態で開いたため、回復系のみ表示されています。"
+  },
+  "items": [
+
+  {
+    "item_id": 1719,
+    "name": "牛乳(体力回復)",
+    "type": "ST",
+    "amount": 15,
+    "full_recovery": false
+  },
+  {
+    "item_id": 1720,
+    "name": "大盛り鉄火丼(HP400回復)",
+    "type": "HP",
+    "amount": 400,
+    "full_recovery": false
+  },
+  {
+    "item_id": 1722,
+    "name": "ピザ(HP500回復)",
+    "type": "HP",
+    "amount": 500,
+    "full_recovery": false
+  },
+  {
+    "item_id": 255,
+    "name": "牛丼特盛り(HP150回復)",
+    "type": "HP",
+    "amount": 150,
+    "full_recovery": false
+  },
+  {
+    "item_id": 800,
+    "name": "つけ麺(HP450回復)",
+    "type": "HP",
+    "amount": 450,
+    "full_recovery": false
+  },
+  {
+    "item_id": 1375,
+    "name": "55カレー(HP555回復)",
+    "type": "HP",
+    "amount": 555,
+    "full_recovery": false
+  },
+  {
+    "item_id": 2893,
+    "name": "ジャンボフランク(HP120回復)",
+    "type": "HP",
+    "amount": 120,
+    "full_recovery": false
+  },
+  {
+    "item_id": 2894,
+    "name": "サーロインステーキ(HP1000回復)",
+    "type": "HP",
+    "amount": 1000,
+    "full_recovery": false
+  },
+  {
+    "item_id": 2895,
+    "name": "チャーハン(HP230回復)",
+    "type": "HP",
+    "amount": 230,
+    "full_recovery": false
+  },
+  {
+    "item_id": 3316,
+    "name": "チョコレート(HP333回復)",
+    "type": "HP",
+    "amount": 333,
+    "full_recovery": false
+  },
+  {
+    "item_id": 3319,
+    "name": "すき焼き(HP1300回復)",
+    "type": "HP",
+    "amount": 1300,
+    "full_recovery": false
+  },
+  {
+    "item_id": 3320,
+    "name": "クッキー(HP333回復)",
+    "type": "HP",
+    "amount": 333,
+    "full_recovery": false
+  },
+  {
+    "item_id": 50528,
+    "name": "山盛りナポリタン(HP600回復)",
+    "type": "HP",
+    "amount": 600,
+    "full_recovery": false
+  },
+  {
+    "item_id": 50584,
+    "name": "濃縮スッポンエキス(HP全回復)",
+    "type": "HP",
+    "amount": 9999999,
+    "full_recovery": true
+  },
+  {
+    "item_id": 50585,
+    "name": "葉巻(気合い全回復)",
+    "type": "EP",
+    "amount": 999999,
+    "full_recovery": true
+  },
+  {
+    "item_id": 50586,
+    "name": "電子タバコ(気合い100回復)",
+    "type": "EP",
+    "amount": 100,
+    "full_recovery": false
+  },
+  {
+    "item_id": 50587,
+    "name": "タバコ(気合い100回復)",
+    "type": "EP",
+    "amount": 100,
+    "full_recovery": false
+  },
+  {
+    "item_id": 50588,
+    "name": "缶コーヒー(体力回復)",
+    "type": "ST",
+    "amount": 15,
+    "full_recovery": true
+  },
+  {
+    "item_id": 50589,
+    "name": "回復しやがれ(体力回復)",
+    "type": "ST",
+    "amount": 15,
+    "full_recovery": false
+  },
+  {
+    "item_id": 50590,
+    "name": "セブンアッパーズ(体力7回復)",
+    "type": "ST",
+    "amount": 7,
+    "full_recovery": false
+  },
+  {
+    "item_id": 50828,
+    "name": "闇鍋(HP全回復)",
+    "type": "HP",
+    "amount": 9999999,
+    "full_recovery": true
+  },
+  {
+    "item_id": 51261,
+    "name": "しゃぶしゃぶ(HP2000回復)",
+    "type": "HP",
+    "amount": 2000,
+    "full_recovery": false
+  },
+  {
+    "item_id": 52072,
+    "name": "虎バーガー",
+    "type": "HP",
+    "amount": 150,
+    "image": "burgerA.gif",
+    "expiry": "permanent",
+    "status": "confirmed"
+  },
+  {
+    "item_id": 52073,
+    "name": "ビッグ虎バーガー",
+    "type": "HP",
+    "amount": 500,
+    "image": "burgerB.gif",
+    "expiry": "permanent",
+    "status": "confirmed"
+  },
+  {
+    "item_id": 52074,
+    "name": "超巨大虎バーガー",
+    "type": "HP",
+    "amount": 1500,
+    "image": "burgerC.gif",
+    "expiry": "permanent",
+    "status": "confirmed"
+  },
+  {
+    "item_id": 52075,
+    "name": "虎バーガーセット",
+    "type": "HP+EP",
+    "amount": {
+      "HP": 600,
+      "EP": 200
+    },
+    "image": "burgerD.gif",
+    "expiry": "permanent",
+    "status": "confirmed"
+  },
+  {
+    "item_id": 52076,
+    "name": "虎バーガータワー",
+    "type": "HP",
+    "amount": 3000,
+    "image": "burgerE.gif",
+    "expiry": "permanent",
+    "status": "confirmed"
+  },
+  {
+    "item_id": 52077,
+    "name": "ブラック虎バーガー",
+    "type": "HP+ST+EP",
+    "amount": {
+      "HP": 300,
+      "ST": 15,
+      "EP": 100
+    },
+    "image": "burgerF.gif",
+    "expiry": "permanent",
+    "status": "confirmed"
+  },
+  {
+    "item_id": 52180,
+    "name": "パフェ",
+    "type": "ST+EP",
+    "amount": {
+      "ST": 5,
+      "EP": 50
+    },
+    "image": "pafe_1.gif",
+    "expiry": "permanent",
+    "status": "confirmed"
+  },
+  {
+    "item_id": 52181,
+    "name": "高級パフェ",
+    "type": "ST+EP",
+    "amount": {
+      "ST": 15,
+      "EP": 150
+    },
+    "image": "pafe_2.gif",
+    "expiry": "permanent",
+    "status": "confirmed"
+  },
+  {
+    "item_id": 73327,
+    "name": "餃子",
+    "type": "HP",
+    "amount": 700,
+    "full_recovery": false
+  }
+]
+}
