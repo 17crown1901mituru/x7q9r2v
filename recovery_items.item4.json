@@ -2,7 +2,7 @@
   "meta": {
     "source": "item4.txt",
     "extracted_at": "2025-10-29T14:39:00+09:00",
-    "description": "単車の虎・回復アイテム辞書",
+    "description": "アイテム辞書",
     "notes": "item.txtから抽出された回復アイテム一覧。HP減少状態で開いたため、回復系のみ表示されています。"
   },
   "items": [
