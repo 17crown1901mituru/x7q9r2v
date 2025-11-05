@@ -110,7 +110,7 @@
     "name": "葉巻(気合い全回復)",
     "type": "EP",
     "amount": 999999,
-    "full_recovery": true
+    "full_recovery": false
   },
   {
     "item_id": 50586,
@@ -166,27 +166,21 @@
     "name": "虎バーガー",
     "type": "HP",
     "amount": 150,
-    "image": "burgerA.gif",
-    "expiry": "permanent",
-    "status": "confirmed"
+    "full_recovery": false
   },
   {
     "item_id": 52073,
     "name": "ビッグ虎バーガー",
     "type": "HP",
     "amount": 500,
-    "image": "burgerB.gif",
-    "expiry": "permanent",
-    "status": "confirmed"
+    "full_recovery": false
   },
   {
     "item_id": 52074,
     "name": "超巨大虎バーガー",
     "type": "HP",
     "amount": 1500,
-    "image": "burgerC.gif",
-    "expiry": "permanent",
-    "status": "confirmed"
+    "full_recovery": false
   },
   {
     "item_id": 52075,
@@ -195,19 +189,15 @@
     "amount": {
       "HP": 600,
       "EP": 200
-    },
-    "image": "burgerD.gif",
-    "expiry": "permanent",
-    "status": "confirmed"
+  },
+      "full_recovery": false
   },
   {
     "item_id": 52076,
     "name": "虎バーガータワー",
     "type": "HP",
     "amount": 3000,
-    "image": "burgerE.gif",
-    "expiry": "permanent",
-    "status": "confirmed"
+    "full_recovery": false
   },
   {
     "item_id": 52077,
@@ -218,9 +208,7 @@
       "ST": 15,
       "EP": 100
     },
-    "image": "burgerF.gif",
-    "expiry": "permanent",
-    "status": "confirmed"
+    "full_recovery": false
   },
   {
     "item_id": 52180,
@@ -230,9 +218,7 @@
       "ST": 5,
       "EP": 50
     },
-    "image": "pafe_1.gif",
-    "expiry": "permanent",
-    "status": "confirmed"
+    "full_recovery": false
   },
   {
     "item_id": 52181,
@@ -242,9 +228,7 @@
       "ST": 15,
       "EP": 150
     },
-    "image": "pafe_2.gif",
-    "expiry": "permanent",
-    "status": "confirmed"
+    "full_recovery": false
   },
   {
     "item_id": 73327,
