@@ -460,7 +460,7 @@
 ) {
     clearInterval(wR);
 
-    // --- 修理 → HP回復 ---
+   // --- 修理 → HP回復 ---
 window.runHealSequence = async function() {
     state.phase = 'REPAIR';
     if (!state.repairEnabled) {
@@ -503,6 +503,7 @@ window.runHealSequence = async function() {
     }, 50);
 };
 
+
 // --- HP回復工程（残数送信付き） ---
 window.runHealProcess = async function() {
     state.phase = 'HEAL';
@@ -516,52 +517,54 @@ window.runHealProcess = async function() {
             return;
         }
 
-        // 以下略（あなたの元コードそのまま）
+        // プリセット選択
+        const mIdx = { 'A': 0, 'B': 1, 'N': 2 }[state.equipMode];
+        popup.querySelectorAll('input[name="select_preset_radio"]')[mIdx]?.click();
+
+        // アイテム一覧
+        const items = Array.from(popup.querySelectorAll('li.itemHP'));
+        const target = (state.targetHpName === 'FREE')
+            ? items[0]
+            : items.find(li => li.innerText.includes(state.targetHpName));
+
+        if (target) {
+            // 残数解析 → 親へ送信
+            const name = state.targetHpName === 'FREE'
+                ? (target.innerText.split('\n')[0] || 'FREE')
+                : state.targetHpName;
+
+            const remainMatch = target.innerText.match(/残り(\d+)/);
+            const stock = remainMatch ? parseInt(remainMatch[1], 10) : 0;
+
+            parent.postMessage({ type: 'HP_REMAIN', payload: { name, stock } }, '*');
+
+            const isFull = target.innerText.includes('全回復');
+            target.click();
+            clearInterval(wH);
+
+            // 回復実行
+            const wF = setInterval(() => {
+                const btn = isFull
+                    ? popup.querySelector('input[type="submit"]')
+                    : popup.querySelector('a.multi-form-submit');
+
+                if (btn) {
+                    btn.click();
+                    clearInterval(wF);
+
+                    setTimeout(async () => {
+                        const checkDoc = await silentNavigate(window.location.href);
+                        if (checkDoc.body.innerHTML.includes('入院中')) {
+                            window.runHealProcess();
+                        } else {
+                            state.phase = 'IDLE';
+                        }
+                    }, 200);
+                }
+            }, 50);
+        }
     }, 150);
 };
-            }
-
-            const mIdx = { 'A': 0, 'B': 1, 'N': 2 }[state.equipMode];
-            popup.querySelectorAll('input[name="select_preset_radio"]')[mIdx]?.click();
-
-            const items = Array.from(popup.querySelectorAll('li.itemHP'));
-            const target = (state.targetHpName === 'FREE')
-                ? items[0]
-                : items.find(li => li.innerText.includes(state.targetHpName));
-
-            if (target) {
-                // 残数解析 → 親へ送信
-                const name = state.targetHpName === 'FREE'
-                    ? (target.innerText.split('\n')[0] || 'FREE')
-                    : state.targetHpName;
-                const remainMatch = target.innerText.match(/残り(\d+)/);
-                const stock = remainMatch ? parseInt(remainMatch[1], 10) : 0;
-                parent.postMessage({ type: 'HP_REMAIN', payload: { name, stock } }, '*');
-
-                const isFull = target.innerText.includes('全回復');
-                target.click();
-                clearInterval(wH);
-
-                const wF = setInterval(() => {
-                    const btn = isFull
-                        ? popup.querySelector('input[type="submit"]')
-                        : popup.querySelector('a.multi-form-submit');
-                    if (btn) {
-                        btn.click();
-                        clearInterval(wF);
-                        setTimeout(async () => {
-                            const checkDoc = await silentNavigate(window.location.href);
-                            if (checkDoc.body.innerHTML.includes('入院中')) {
-                                window.runHealProcess();
-                            } else {
-                                state.phase = 'IDLE';
-                            }
-                        }, 200);
-                    }
-                }, 50);
-            }
-        }, 150);
-    };
 
     // --- ST/SP回復（iframe内完結） ---
     window.executeStatRecovery = async function(type) {
