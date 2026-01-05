@@ -454,24 +454,71 @@
                 sub.click();
                 clearInterval(wR);
                 window.runHealProcess();
-            } else if (document.body.innerText.includes('壊れていません')) {
-                clearInterval(wR);
-                window.runHealProcess();
-            }
-        }, 50);
-    };
+            } else if (
+    document.body.innerText.includes('修理する必要はありません') ||
+    document.body.innerText.includes('修理失敗')
+) {
+    clearInterval(wR);
 
-    // --- HP回復工程（残数送信付き） ---
-    window.runHealProcess = async function() {
-        state.phase = 'HEAL';
-        const targetUrl = state.teamId ? `/war/member-list/${state.teamId}` : '/war/member-list';
-        await silentNavigate(targetUrl);
+    // --- 修理 → HP回復 ---
+window.runHealSequence = async function() {
+    state.phase = 'REPAIR';
+    if (!state.repairEnabled) {
+        window.runHealProcess();
+        return;
+    }
 
-        const wH = setInterval(() => {
-            const popup = document.querySelector('.popupWindowContents');
-            if (!popup) {
-                document.querySelector('img[src*="footer_heal.png"]')?.parentElement?.click();
-                return;
+    await silentNavigate('/item/repair-confirm');
+
+    const wR = setInterval(() => {
+        const sub = document.querySelector('input[type="submit"]');
+        if (sub) {
+            sub.click();
+            clearInterval(wR);
+            window.runHealProcess();
+        } else if (
+            document.body.innerText.includes('修理する必要はありません') ||
+            document.body.innerText.includes('修理失敗')
+        ) {
+            clearInterval(wR);
+
+            document.open();
+            document.write(`
+                <html>
+                <head><title>修理エラー</title></head>
+                <body style="background:#111;color:#eee;font-family:sans-serif;padding:20px;">
+                    <h1 style="color:#f00;">修理する必要はありません</h1>
+                    <p>部品は壊れていないため、修理は不要です。</p>
+                    <script>
+                        window.history.replaceState({}, '', '/repair-error/');
+                    </script>
+                </body>
+                </html>
+            `);
+            document.close();
+
+            state.phase = 'IDLE';
+            return;
+        }
+    }, 50);
+};
+
+// --- HP回復工程（残数送信付き） ---
+window.runHealProcess = async function() {
+    state.phase = 'HEAL';
+    const targetUrl = state.teamId ? `/war/member-list/${state.teamId}` : '/war/member-list';
+    await silentNavigate(targetUrl);
+
+    const wH = setInterval(() => {
+        const popup = document.querySelector('.popupWindowContents');
+        if (!popup) {
+            document.querySelector('img[src*="footer_heal.png"]')?.parentElement?.click();
+            return;
+        }
+
+        // 以下略（あなたの元コードそのまま）
+    }, 150);
+};
             }
 
             const mIdx = { 'A': 0, 'B': 1, 'N': 2 }[state.equipMode];
