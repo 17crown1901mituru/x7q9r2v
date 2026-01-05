@@ -1,7 +1,7 @@
 // ==UserScript==
-// @name         Tantora Ultra Engine V15
+// @name         Tantora Ultra Engine V15 (iframe split)
 // @namespace    https://viayoo.com/ekt6gu
-// @version      15.11.7
+// @version      15.11.7-iframe
 // @match        https://tantora.jp/*
 // @author       光琉✞みつる
 // @grant        none
@@ -11,79 +11,78 @@
 (function() {
     'use strict';
 
-    // --- [1] 保存キーと設定のロード ---
+    const isIframe = window !== window.parent;
+
+    /******************************************************
+     * 共通 state 初期化（UIもiframeも同じ構造を参照）
+     ******************************************************/
     const STORAGE_KEY_SETTINGS = 'tmx_v15_settings';
     const STORAGE_KEY_LOGS     = 'tmx_v15_logs';
 
     const savedSettings = JSON.parse(localStorage.getItem(STORAGE_KEY_SETTINGS) || '{}');
     const savedLogs     = JSON.parse(localStorage.getItem(STORAGE_KEY_LOGS) || '{}');
 
-    // --- [2] 共通状態（state）の定義 ---
-    window.state = {
-        // 司令塔フラグ（将来拡張用）
-        flowFlag: 0,      // 0:待機, 1:予約, 2:抗争中
+    if (!window.state) {
+        window.state = {
+            flowFlag: 0,
+            repairEnabled: savedSettings.repairEnabled || false,
+            equipMode:     savedSettings.equipMode     || 'N',
+            targetHpName:  savedSettings.hpName        || 'FREE',
+            delayMs:       savedSettings.delayMs !== undefined ? savedSettings.delayMs : 0,
 
-        // 動作設定
-        repairEnabled: savedSettings.repairEnabled || false,
-        equipMode:     savedSettings.equipMode     || 'N',
-        targetHpName:  savedSettings.hpName        || 'FREE',
-        delayMs:       savedSettings.delayMs !== undefined ? savedSettings.delayMs : 0,
+            phase:          'IDLE',
+            availableItems: [],
+            enemyTeamId:    null,
+            teamId:         null,
+            startTime:      null,
+            isTimerRunning: false,
+            isWarActive:    false,
+            loggingActive:  false,
 
-        // 内部ステータス
-        phase:          'IDLE',    // IDLE / REPAIR / HEAL / STAT_HEAL
-        availableItems: [],
-        enemyTeamId:    null,
-        teamId:         null,
-        startTime:      null,
-        isTimerRunning: false,
-        isWarActive:    false,     // 抗争モード中かどうか
-        loggingActive:  false,     // ロギング中かどうか
+            logs: {
+                action: Array.isArray(savedLogs.action)  ? savedLogs.action  : [],
+                traffic: Array.isArray(savedLogs.traffic) ? savedLogs.traffic : []
+            },
 
-        // ログ記録
-        logs: {
-            action: Array.isArray(savedLogs.action)  ? savedLogs.action  : [],
-            traffic: Array.isArray(savedLogs.traffic) ? savedLogs.traffic : []
-        },
+            saveSettings() {
+                localStorage.setItem(STORAGE_KEY_SETTINGS, JSON.stringify({
+                    repairEnabled: this.repairEnabled,
+                    equipMode:     this.equipMode,
+                    hpName:        this.targetHpName,
+                    delayMs:       this.delayMs
+                }));
+            },
 
-        // 設定保存
-        saveSettings() {
-            localStorage.setItem(STORAGE_KEY_SETTINGS, JSON.stringify({
-                repairEnabled: this.repairEnabled,
-                equipMode:     this.equipMode,
-                hpName:        this.targetHpName,
-                delayMs:       this.delayMs
-            }));
-        },
+            saveLogs() {
+                localStorage.setItem(STORAGE_KEY_LOGS, JSON.stringify({
+                    action: this.logs.action,
+                    traffic: this.logs.traffic,
+                    teamId: this.teamId,
+                    startTime: this.startTime
+                }));
+            },
 
-        // ログ保存
-        saveLogs() {
-            localStorage.setItem(STORAGE_KEY_LOGS, JSON.stringify({
-                action: this.logs.action,
-                traffic: this.logs.traffic,
-                teamId: this.teamId,
-                startTime: this.startTime
-            }));
-        },
+            resetLogs() {
+                this.logs.action = [];
+                this.logs.traffic = [];
+                this.saveLogs();
+            }
+        };
+    }
 
-        // ログ初期化（新しい抗争開始時）
-        resetLogs() {
-            this.logs.action = [];
-            this.logs.traffic = [];
-            this.saveLogs();
-        }
-    };
-
-    // --- [3] 通信フックの基底準備 ---
-    window.originalFetch = window.fetch;
-
-    console.log('TMX Core: V15 recovery system base initialized.');
+    window.originalFetch = window.originalFetch || window.fetch;
 })();
 
+/******************************************************
+ * ここから：表タブ専用（UI・司令塔）
+ ******************************************************/
 (function() {
     'use strict';
+    if (window !== window.parent) return; // iframeでは動かさない
+
     const state = window.state;
 
-    // --- [1] UIの構築 (Shadow DOM) ---
+    // --- UI構築（あなたの元コードそのまま） ---
     if (document.getElementById('tmx-shadow-container')) return;
 
     const container = document.createElement('div');
@@ -104,12 +103,12 @@
     shadow.appendChild(root);
 
     const ui = {
-        r: document.createElement('div'), // Repair ON/OFF
-        m: document.createElement('div'), // Mode A/B/N
-        d: document.createElement('div'), // Delayトグル
-        i: document.createElement('div'), // HP Item Name
-        c: document.createElement('div'), // Item Count (Disp)
-        l: document.createElement('div')  // Log/Action
+        r: document.createElement('div'),
+        m: document.createElement('div'),
+        d: document.createElement('div'),
+        i: document.createElement('div'),
+        c: document.createElement('div'),
+        l: document.createElement('div')
     };
 
     Object.keys(ui).forEach(k => {
@@ -117,29 +116,22 @@
         root.appendChild(ui[k]);
     });
 
-    // --- [2] UI描画・同期ロジック ---
     state.updateUI = () => {
-        // Repair
         ui.r.innerHTML = `Repair<br>${state.repairEnabled ? 'ON' : 'OFF'}`;
         ui.r.style.color = state.repairEnabled ? '#5bc0de' : '#666';
 
-        // Mode (A/B/N)
         ui.m.innerHTML = `Mode<br>${state.equipMode}`;
         ui.m.style.color = { 'A': '#ff0', 'B': '#f00', 'N': '#fff' }[state.equipMode];
 
-        // Delay
         ui.d.innerHTML = `Delay<br>${state.delayMs}`;
         ui.d.style.color = state.delayMs > 0 ? '#ff9900' : '#0f0';
 
-        // HP Item Name (最大10文字)
         const truncatedName = state.targetHpName.substring(0, 10);
         ui.i.innerHTML = `<div style="font-size:8px;">${truncatedName}</div>`;
 
-        // Item Count
         const cur = state.availableItems?.find(x => x.name === state.targetHpName);
         ui.c.innerHTML = `<span style="font-size:13px;">${cur ? cur.stock : '0'}</span>`;
 
-        // Log Button
         if (state.phase === 'IDLE') {
             ui.l.innerHTML = 'LOG<br>SAVE';
             ui.l.style.background = '#004400';
@@ -149,23 +141,25 @@
         }
     };
 
-    // --- [3] イベントハンドラ ---
     ui.r.onclick = () => {
         state.repairEnabled = !state.repairEnabled;
         state.saveSettings();
         state.updateUI();
+        sendConfigToIframe();
     };
 
     ui.m.onclick = () => {
         state.equipMode = { 'N': 'A', 'A': 'B', 'B': 'N' }[state.equipMode];
         state.saveSettings();
         state.updateUI();
+        sendConfigToIframe();
     };
 
     ui.d.onclick = () => {
-        state.delayMs = (state.delayMs + 500) % 2500; // 0 -> 500 -> ... -> 2000 -> 0
+        state.delayMs = (state.delayMs + 500) % 2500;
         state.saveSettings();
         state.updateUI();
+        sendConfigToIframe();
     };
 
     ui.i.onclick = () => {
@@ -173,9 +167,9 @@
         state.targetHpName = names[(names.indexOf(state.targetHpName) + 1) % names.length] || 'FREE';
         state.saveSettings();
         state.updateUI();
+        sendConfigToIframe();
     };
 
-    // ログビューア（別タブ）を開く
     ui.l.onclick = () => {
         const win = window.open('', '_blank');
         if (!win) return;
@@ -185,10 +179,10 @@
         win.document.write(`
             <html><head><title>Tantora V15 Logs</title></head>
             <body style="background:#111;color:#eee;font-family:monospace;padding:20px;">
-                <h1 style="color:#0f0;border-bottom:1px solid #333;">Action Logs (行動)</h1>
-                <pre id="action" style="background:#000;padding:10px;border:1px solid #444;white-space:pre-wrap;word-break:break-all;"></pre>
-                <h1 style="color:#00ffff;border-bottom:1px solid #333;">Traffic Logs (通信)</h1>
-                <pre id="traffic" style="background:#000;padding:10px;border:1px solid #444;white-space:pre-wrap;word-break:break-all;"></pre>
+                <h1 style="color:#0f0;border-bottom:1px solid:#333;">Action Logs (行動)</h1>
+                <pre id="action" style="background:#000;padding:10px;border:1px solid:#444;white-space:pre-wrap;word-break:break-all;"></pre>
+                <h1 style="color:#0ff;border-bottom:1px solid:#333;">Traffic Logs (通信)</h1>
+                <pre id="traffic" style="background:#000;padding:10px;border:1px solid:#444;white-space:pre-wrap;word-break:break-all;"></pre>
                 <button id="saveAction">Actionログを保存</button>
                 <button id="saveTraffic">Trafficログを保存</button>
                 <script>
@@ -232,47 +226,155 @@
         state.logWindow = win;
     };
 
-    // --- [4] UI自己修復 ---
     setInterval(() => {
-        if (!document.getElementById('tmx-shadow-container')) {
-            // UI が消えたので再生成
-            // （この IIFE は一度しか走らないので、ここでは何もしない）
-        }
         if (state.updateUI) state.updateUI();
     }, 500);
 
     state.updateUI();
+
+    // --- 表→iframe 設定送信 ---
+    function sendConfigToIframe() {
+        const f = state.warIframe;
+        if (!f) return;
+        f.contentWindow.postMessage({
+            type: 'WAR_CONFIG',
+            payload: {
+                repairEnabled: state.repairEnabled,
+                equipMode:     state.equipMode,
+                targetHpName:  state.targetHpName,
+                delayMs:       state.delayMs
+            }
+        }, '*');
+    }
+
+    // --- iframeからの通知（残数・ログ） ---
+    window.addEventListener('message', (ev) => {
+        if (!ev.data) return;
+        if (ev.data.type === 'HP_REMAIN') {
+            const { name, stock } = ev.data.payload;
+            const idx = state.availableItems.findIndex(x => x.name === name);
+            if (idx >= 0) state.availableItems[idx].stock = stock;
+            else state.availableItems.push({ name, stock });
+            state.updateUI();
+        } else if (ev.data.type === 'LOG_ACTION') {
+            state.logs.action.push(ev.data.text);
+            state.saveLogs();
+            if (state.logWindow && !state.logWindow.closed) {
+                state.logWindow.postMessage({ type: 'action', text: ev.data.text }, '*');
+            }
+        } else if (ev.data.type === 'LOG_TRAFFIC') {
+            state.logs.traffic.push(ev.data.text);
+            state.saveLogs();
+            if (state.logWindow && !state.logWindow.closed) {
+                state.logWindow.postMessage({ type: 'traffic', text: ev.data.text }, '*');
+            }
+        }
+    });
+
+    // --- 抗争解析＋1500ms前に iframe 生成（表タブはここまで） ---
+    function analyzeMyPage() {
+        if (!location.href.includes('/mypage')) return;
+
+        const links = Array.from(document.querySelectorAll('a'));
+        const battleLink = links.find(a => a.innerText.includes('と抗争勃発!!'));
+        if (!battleLink) return;
+
+        const container = battleLink.parentElement;
+        if (!container) return;
+
+        const txt = container.innerText;
+        const m = txt.match(/(\d{1,2})[\/月](\d{1,2})[\/日]?\s*(\d{1,2})時(\d{1,2})分開戦/);
+        if (!m) return;
+
+        const [, month, day, hour, min] = m;
+        const idMatch = battleLink.href.match(/team_id=(\d+)/);
+        if (!idMatch) return;
+
+        const teamId = idMatch[1];
+        state.teamId = teamId;
+
+        const year = new Date().getFullYear();
+        const target = new Date(`${year}/${month}/${day} ${hour}:${min}:00`);
+        state.startTime = target.getTime();
+
+        if (state.isTimerRunning) return;
+        state.isTimerRunning = true;
+
+        const timer = setInterval(() => {
+            if (Date.now() >= state.startTime - 1500) {
+                clearInterval(timer);
+                createWarIframe();
+            }
+        }, 100);
+    }
+
+    function createWarIframe() {
+        if (state.warIframe) return;
+
+        const f = document.createElement('iframe');
+        f.style.position = 'fixed';
+        f.style.width = '1px';
+        f.style.height = '1px';
+        f.style.bottom = '0';
+        f.style.right = '0';
+        f.style.border = '0';
+        f.src = `/war/member-list/${state.teamId}`;
+        state.warIframe = f;
+        document.body.appendChild(f);
+
+        // iframeロード後に設定を送る
+        f.onload = () => {
+            sendConfigToIframe();
+        };
+    }
+
+    if (document.readyState === 'complete') {
+        analyzeMyPage();
+    } else {
+        window.addEventListener('load', analyzeMyPage);
+    }
 })();
 
+/******************************************************
+ * ここから：iframe専用エンジン（表タブは絶対触らない）
+ ******************************************************/
 (function() {
     'use strict';
+    if (window === window.parent) return; // 表タブでは動かさない
+
     const state = window.state;
     const baseFetch = window.originalFetch || window.fetch;
 
-    // --- ログユーティリティ ---
+    // --- ログユーティリティ（親へ送る） ---
     function logAction(msg) {
         const line = `[${new Date().toLocaleTimeString()}] ${msg}`;
         state.logs.action.push(line);
         if (state.loggingActive) state.saveLogs();
-        if (state.logWindow && !state.logWindow.closed) {
-            state.logWindow.postMessage({ type: 'action', text: line }, '*');
-        }
+        parent.postMessage({ type: 'LOG_ACTION', text: line }, '*');
     }
 
     function logTraffic(msg) {
         const line = `[RECV] ${new Date().toLocaleTimeString()}: ${msg}`;
         state.logs.traffic.push(line);
         if (state.loggingActive) state.saveLogs();
-        if (state.logWindow && !state.logWindow.closed) {
-            state.logWindow.postMessage({ type: 'traffic', text: line }, '*');
-        }
+        parent.postMessage({ type: 'LOG_TRAFFIC', text: line }, '*');
     }
 
-    // --- [道理] 通信傍受(fetch)のオーバーライド ---
+    // --- 設定受信（表タブから） ---
+    window.addEventListener('message', (ev) => {
+        if (!ev.data || ev.data.type !== 'WAR_CONFIG') return;
+        const cfg = ev.data.payload;
+        if (cfg.repairEnabled !== undefined) state.repairEnabled = cfg.repairEnabled;
+        if (cfg.equipMode     !== undefined) state.equipMode     = cfg.equipMode;
+        if (cfg.targetHpName  !== undefined) state.targetHpName  = cfg.targetHpName;
+        if (cfg.delayMs       !== undefined) state.delayMs       = cfg.delayMs;
+        state.saveSettings();
+    });
+
+    // --- fetchフック（iframe内だけ） ---
     window.fetch = async function(...args) {
         const url = typeof args[0] === 'string' ? args[0] : args[0].url;
 
-        // 1. 攻撃パケットの制御（表ブラウザの攻撃ツールのみ対象）
         if (url.includes('/war/battle?other/')) {
             if (state.phase !== 'IDLE') {
                 logTraffic(`[BLOCKED] ${url}`);
@@ -283,39 +385,25 @@
             }
         }
 
-        // 2. 通信の実行
         const resp = await baseFetch.apply(this, args);
 
-        // 3. 抗争会場(/war/)に関連する通信の解析
         if (url.includes('/war/')) {
             const clone = resp.clone();
             const html = await clone.text();
 
-            // 【最重要：終了検知】
             if (url.includes('/war/result') || html.includes('抗争は終了しました')) {
-                // ログ確定保存
                 state.loggingActive = false;
                 state.saveLogs();
                 logAction('抗争終了を検知：ログを確定保存しました。');
-
-                // 状態を初期化
                 state.isWarActive = false;
                 state.phase = 'IDLE';
-
-                // リザルト画面を表ブラウザにそのまま描写（表ツールを消す）
-                try {
-                    document.open();
-                    document.write(html);
-                    document.close();
-                } catch (e) {
-                    console.error('Result render failed:', e);
-                }
-
-                if (state.updateUI) state.updateUI();
+                // ★ 表タブは触らない：iframe内だけで完結
+                document.open();
+                document.write(html);
+                document.close();
                 return resp;
             }
 
-            // 4. 入院検知
             if (html.includes('<blink>入院中</blink>')) {
                 if (state.phase === 'IDLE') {
                     state.phase = 'REPAIR';
@@ -324,7 +412,6 @@
                 }
             }
 
-            // 5. ステータス数値の監視（ST/SP回復へ）
             const spMatch = html.match(/sp[^>]*>(\d+)\//i);
             const stMatch = html.match(/st[^>]*>(\d+)\//i);
 
@@ -335,19 +422,13 @@
                 if (window.executeStatRecovery) window.executeStatRecovery('ST');
             }
 
-            // 通信ログ
             logTraffic(url);
         }
 
         return resp;
     };
-})();
 
-(function() {
-    'use strict';
-    const state = window.state;
-
-    // --- [1] 疑似遷移関数 ---
+    // --- 疑似遷移（iframe内だけ） ---
     async function silentNavigate(url) {
         const resp = await fetch(url);
         const html = await resp.text();
@@ -357,7 +438,7 @@
         return doc;
     }
 
-    // --- [2] 修理工程（HP回復へ自動連動） ---
+    // --- 修理 → HP回復 ---
     window.runHealSequence = async function() {
         state.phase = 'REPAIR';
         if (!state.repairEnabled) {
@@ -380,7 +461,7 @@
         }, 50);
     };
 
-    // --- [3] HP回復工程（プリセット・多重・戦地復帰） ---
+    // --- HP回復工程（残数送信付き） ---
     window.runHealProcess = async function() {
         state.phase = 'HEAL';
         const targetUrl = state.teamId ? `/war/member-list/${state.teamId}` : '/war/member-list';
@@ -402,6 +483,14 @@
                 : items.find(li => li.innerText.includes(state.targetHpName));
 
             if (target) {
+                // 残数解析 → 親へ送信
+                const name = state.targetHpName === 'FREE'
+                    ? (target.innerText.split('\n')[0] || 'FREE')
+                    : state.targetHpName;
+                const remainMatch = target.innerText.match(/残り(\d+)/);
+                const stock = remainMatch ? parseInt(remainMatch[1], 10) : 0;
+                parent.postMessage({ type: 'HP_REMAIN', payload: { name, stock } }, '*');
+
                 const isFull = target.innerText.includes('全回復');
                 target.click();
                 clearInterval(wH);
@@ -419,7 +508,6 @@
                                 window.runHealProcess();
                             } else {
                                 state.phase = 'IDLE';
-                                if (state.updateUI) state.updateUI();
                             }
                         }, 200);
                     }
@@ -428,13 +516,12 @@
         }, 150);
     };
 
-    // --- [4] ST/SP回復実行エンジン（HPを含むアイテムを除外） ---
+    // --- ST/SP回復（iframe内完結） ---
     window.executeStatRecovery = async function(type) {
         if (state.phase !== 'IDLE') return;
         state.phase = 'STAT_HEAL';
         const logLabel = (type === 'ST') ? 'ST' : 'SP';
-        state.logs.action.push(`[${new Date().toLocaleTimeString()}] ${logLabel}回復開始`);
-        if (state.loggingActive) state.saveLogs();
+        logAction(`${logLabel}回復開始`);
 
         await silentNavigate('/item/use-list');
 
@@ -443,9 +530,7 @@
             const itemRows = Array.from(document.querySelectorAll('li, .item-box'));
             const targetItem = itemRows.find(row => {
                 const text = row.innerText;
-                // HP を含むアイテムは絶対に除外（全角・小文字も含めて判定）
                 if (/ｈｐ|ＨＰ|hp|HP/.test(text)) return false;
-
                 if (type === 'ST') {
                     return text.includes('ST') && (text.includes('回復') || text.includes('全快'));
                 } else if (type === 'SP') {
@@ -470,9 +555,7 @@
                                 const targetUrl = state.teamId ? `/war/member-list/${state.teamId}` : '/war/member-list';
                                 await silentNavigate(targetUrl);
                                 state.phase = 'IDLE';
-                                state.logs.action.push(`[${new Date().toLocaleTimeString()}] ${logLabel}回復完了・戦線復帰`);
-                                if (state.loggingActive) state.saveLogs();
-                                if (state.updateUI) state.updateUI();
+                                logAction(`${logLabel}回復完了・戦線復帰`);
                             }, 200);
                         } else if (document.body.innerText.includes('使用しました')) {
                             clearInterval(wF);
@@ -480,7 +563,6 @@
                                 const targetUrl = state.teamId ? `/war/member-list/${state.teamId}` : '/war/member-list';
                                 await silentNavigate(targetUrl);
                                 state.phase = 'IDLE';
-                                if (state.updateUI) state.updateUI();
                             }, 200);
                         }
                     }, 50);
@@ -490,120 +572,13 @@
             }
         }, 50);
     };
-})();
 
-(function() {
-    'use strict';
-
-    const state = window.state;
-
-    // --- [1] マイページ解析ロジック（抗争予約） ---
-    window.analyzeMyPage = async function () {
-        if (!location.href.includes('/mypage')) return;
-
-        const links = Array.from(document.querySelectorAll('a'));
-        const battleLink = links.find(a => a.innerText.includes('と抗争勃発!!'));
-        if (!battleLink) return;
-
-        const container = battleLink.parentElement;
-        if (!container) return;
-
-        const containerText = container.innerText;
-
-        // ★ 全フォーマット対応
-        const timeMatch = containerText.match(
-            /(\d{1,2})[\/月](\d{1,2})[\/日]?\s*(\d{1,2})時(\d{1,2})分開戦/
-        );
-
-        if (!timeMatch) {
-            state.logs.action.push(
-                `[${new Date().toLocaleTimeString()}] 解析失敗: 時刻フォーマット不一致`
-            );
-            state.saveLogs();
-            return;
-        }
-
-        const [, month, day, hour, min] = timeMatch;
-
-        // 抗争ID
-        const idMatch = battleLink.href.match(/team_id=(\d+)/);
-        if (!idMatch) return;
-
-        state.teamId = idMatch[1];
-        state.startTime = `${month}/${day} ${hour}:${min}`;
-
-        // ログ
-        state.logs.action.push(
-            `[${new Date().toLocaleTimeString()}] 解析成功: ID ${state.teamId} / ${hour}:${min}開戦を予約`
-        );
-        state.saveLogs();
-
-        // ★ ここで isWarActive を true にしない（タイマーが動かなくなるため）
-
-        // --- 開戦時刻をミリ秒に変換 ---
-        const nowYear = new Date().getFullYear();
-        const targetDate = new Date(`${nowYear}/${month}/${day} ${hour}:${min}:00`);
-        const targetMs = targetDate.getTime();
-
-        // --- 突撃タイマー起動 ---
-        setupAssaultTimer(targetMs);
-    };
-
-    // --- [2] 突撃タイマー ---
-    function setupAssaultTimer(targetMs) {
-        const assaultOffset = 1500; // 1.5秒前に突撃
-        const triggerTime = targetMs - assaultOffset;
-
-        const checkTimer = setInterval(() => {
-            const now = Date.now();
-            if (now >= triggerTime) {
-                clearInterval(checkTimer);
-                executeAssault();
-            }
-        }, 100);
-    }
-
-    // --- [3] 突撃実行 ---
-    async function executeAssault() {
-        if (!state.teamId) {
-            state.logs.action.push('突撃エラー: 戦地IDが不明です');
-            state.saveLogs();
-            return;
-        }
-
-        state.logs.action.push(
-            `[${new Date().toLocaleTimeString()}] 突撃開始: 会場へ移動します`
-        );
-        state.saveLogs();
-
-        const warUrl = `/war/member-list/${state.teamId}`;
-
-        try {
-            const resp = await fetch(warUrl);
-            const html = await resp.text();
-            const parser = new DOMParser();
-            const doc = parser.parseFromString(html, 'text/html');
-
-            // ページ書き換え
-            document.body.innerHTML = doc.body.innerHTML;
-
-            // ★ 抗争開始 → ロギング開始
+    // --- iframe初期化：抗争ページならロギングON ---
+    (function init() {
+        if (location.href.includes('/war/member-list/')) {
             state.loggingActive = true;
-            state.phase = 'IDLE';
-            state.isWarActive = true; // ← ここで true にするのが正しい
-            state.saveLogs();
-
-            if (typeof state.updateUI === 'function') state.updateUI();
-        } catch (e) {
-            state.logs.action.push('突撃失敗: 通信エラーが発生しました');
-            state.saveLogs();
+            state.isWarActive = true;
+            logAction('突撃成功 → ロギング開始');
         }
-    }
-
-    // --- エントリポイント ---
-    if (document.readyState === 'complete') {
-        window.analyzeMyPage();
-    } else {
-        window.addEventListener('load', window.analyzeMyPage);
-    }
+    })();
 })();
