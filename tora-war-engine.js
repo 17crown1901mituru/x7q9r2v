@@ -492,63 +492,64 @@
 
 (function() {
     'use strict';
+
     const state = window.state;
 
     // --- [1] マイページ解析ロジック（抗争予約） ---
     window.analyzeMyPage = async function () {
-    if (state.isWarActive || !location.href.includes('/mypage')) return;
+        if (!location.href.includes('/mypage')) return;
 
-    const links = Array.from(document.querySelectorAll('a'));
-    const battleLink = links.find(a => a.innerText.includes('と抗争勃発!!'));
-    if (!battleLink) return; // リンクが無ければ終了（例外防止）
+        const links = Array.from(document.querySelectorAll('a'));
+        const battleLink = links.find(a => a.innerText.includes('と抗争勃発!!'));
+        if (!battleLink) return;
 
-    // 親要素が無い場合の例外防止
-    const container = battleLink.parentElement;
-    if (!container) return;
+        const container = battleLink.parentElement;
+        if (!container) return;
 
-    const containerText = container.innerText;
+        const containerText = container.innerText;
 
-    // ★ 修正ポイント：全フォーマット対応の正規表現
-    // 01/05 21時11分開戦
-    // 1/5 21時11分開戦
-    // 1月5日 21時11分開戦
-    // 01月05日 21時11分開戦
-    const timeMatch = containerText.match(
-        /(\d{1,2})[\/月](\d{1,2})[\/日]?\s*(\d{1,2})時(\d{1,2})分開戦/
-    );
+        // ★ 全フォーマット対応
+        const timeMatch = containerText.match(
+            /(\d{1,2})[\/月](\d{1,2})[\/日]?\s*(\d{1,2})時(\d{1,2})分開戦/
+        );
 
-    if (!timeMatch) {
-        // 解析失敗ログ（例外を出さず安全に終了）
+        if (!timeMatch) {
+            state.logs.action.push(
+                `[${new Date().toLocaleTimeString()}] 解析失敗: 時刻フォーマット不一致`
+            );
+            state.saveLogs();
+            return;
+        }
+
+        const [, month, day, hour, min] = timeMatch;
+
+        // 抗争ID
+        const idMatch = battleLink.href.match(/team_id=(\d+)/);
+        if (!idMatch) return;
+
+        state.teamId = idMatch[1];
+        state.startTime = `${month}/${day} ${hour}:${min}`;
+
+        // ログ
         state.logs.action.push(
-            `[${new Date().toLocaleTimeString()}] 解析失敗: 時刻フォーマット不一致`
+            `[${new Date().toLocaleTimeString()}] 解析成功: ID ${state.teamId} / ${hour}:${min}開戦を予約`
         );
         state.saveLogs();
-        return;
-    }
 
-    const [, month, day, hour, min] = timeMatch;
+        // ★ ここで isWarActive を true にしない（タイマーが動かなくなるため）
 
-    // 抗争ID抽出
-    const idMatch = battleLink.href.match(/team_id=(\d+)/);
-    if (!idMatch) return;
+        // --- 開戦時刻をミリ秒に変換 ---
+        const nowYear = new Date().getFullYear();
+        const targetDate = new Date(`${nowYear}/${month}/${day} ${hour}:${min}:00`);
+        const targetMs = targetDate.getTime();
 
-    state.teamId = idMatch[1];
-    state.startTime = `${month}/${day} ${hour}:${min}`;
-
-    // 解析成功ログ
-    state.logs.action.push(
-        `[${new Date().toLocaleTimeString()}] 解析成功: ID ${state.teamId} / ${hour}:${min}開戦を予約`
-    );
-    state.saveLogs();
-
-    // フラグセット
-    state.isWarActive = true;
-    state.saveState();
-};
+        // --- 突撃タイマー起動 ---
+        setupAssaultTimer(targetMs);
+    };
 
     // --- [2] 突撃タイマー ---
     function setupAssaultTimer(targetMs) {
-        const assaultOffset = 1500;
+        const assaultOffset = 1500; // 1.5秒前に突撃
         const triggerTime = targetMs - assaultOffset;
 
         const checkTimer = setInterval(() => {
@@ -568,7 +569,9 @@
             return;
         }
 
-        state.logs.action.push(`[${new Date().toLocaleTimeString()}] 突撃開始: 会場へ移動します`);
+        state.logs.action.push(
+            `[${new Date().toLocaleTimeString()}] 突撃開始: 会場へ移動します`
+        );
         state.saveLogs();
 
         const warUrl = `/war/member-list/${state.teamId}`;
@@ -579,11 +582,13 @@
             const parser = new DOMParser();
             const doc = parser.parseFromString(html, 'text/html');
 
+            // ページ書き換え
             document.body.innerHTML = doc.body.innerHTML;
 
-            // 抗争開始 → ロギング開始
+            // ★ 抗争開始 → ロギング開始
             state.loggingActive = true;
             state.phase = 'IDLE';
+            state.isWarActive = true; // ← ここで true にするのが正しい
             state.saveLogs();
 
             if (typeof state.updateUI === 'function') state.updateUI();
