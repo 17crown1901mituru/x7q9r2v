@@ -1,7 +1,9 @@
 // ==UserScript==
-// @name         Tantora Ultra Engine V15 (Recovery Core)
+// @name         Tantora Ultra Engine V15
+// @namespace    https://viayoo.com/ekt6gu
 // @version      15.11.7
 // @match        https://tantora.jp/*
+// @author       光琉✞みつる
 // @grant        none
 // @run-at       document-start
 // ==/UserScript==
