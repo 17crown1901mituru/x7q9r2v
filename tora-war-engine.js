@@ -439,49 +439,37 @@
     }
 
     // --- 修理 → HP回復 ---
-    window.runHealSequence = async function() {
-        state.phase = 'REPAIR';
-        if (!state.repairEnabled) {
-            window.runHealProcess();
-            return;
-        }
-
-        await silentNavigate('/item/repair-confirm');
-
-        const wR = setInterval(() => {
-            const sub = document.querySelector('input[type="submit"]');
-            if (sub) {
-                sub.click();
-                clearInterval(wR);
-                window.runHealProcess();
-            } else if (
-    document.body.innerText.includes('修理する必要はありません') ||
-    document.body.innerText.includes('修理失敗')
-) {
-    clearInterval(wR);
-
-   // --- 修理 → HP回復 ---
 window.runHealSequence = async function() {
     state.phase = 'REPAIR';
+
+    // 修理OFF → 即HP回復
     if (!state.repairEnabled) {
         window.runHealProcess();
         return;
     }
 
+    // 修理確認ページへ
     await silentNavigate('/item/repair-confirm');
 
     const wR = setInterval(() => {
         const sub = document.querySelector('input[type="submit"]');
+
+        // 修理ボタンがある → 修理実行
         if (sub) {
             sub.click();
             clearInterval(wR);
             window.runHealProcess();
-        } else if (
+            return;
+        }
+
+        // 修理不要（修理失敗 or 修理する必要はありません）
+        if (
             document.body.innerText.includes('修理する必要はありません') ||
             document.body.innerText.includes('修理失敗')
         ) {
             clearInterval(wR);
 
+            // iframe内だけでエラー画面を描画
             document.open();
             document.write(`
                 <html>
@@ -500,7 +488,78 @@ window.runHealSequence = async function() {
             state.phase = 'IDLE';
             return;
         }
+
     }, 50);
+};
+
+
+// --- HP回復工程（残数送信付き） ---
+window.runHealProcess = async function() {
+    state.phase = 'HEAL';
+
+    const targetUrl = state.teamId ? `/war/member-list/${state.teamId}` : '/war/member-list';
+    await silentNavigate(targetUrl);
+
+    const wH = setInterval(() => {
+        const popup = document.querySelector('.popupWindowContents');
+
+        // ポップアップがまだ → 開く
+        if (!popup) {
+            document.querySelector('img[src*="footer_heal.png"]')?.parentElement?.click();
+            return;
+        }
+
+        // プリセット選択
+        const mIdx = { 'A': 0, 'B': 1, 'N': 2 }[state.equipMode];
+        popup.querySelectorAll('input[name="select_preset_radio"]')[mIdx]?.click();
+
+        // アイテム一覧
+        const items = Array.from(popup.querySelectorAll('li.itemHP'));
+        const target = (state.targetHpName === 'FREE')
+            ? items[0]
+            : items.find(li => li.innerText.includes(state.targetHpName));
+
+        if (!target) return;
+
+        // 残数解析 → 親へ送信
+        const name = state.targetHpName === 'FREE'
+            ? (target.innerText.split('\n')[0] || 'FREE')
+            : state.targetHpName;
+
+        const remainMatch = target.innerText.match(/残り(\d+)/);
+        const stock = remainMatch ? parseInt(remainMatch[1], 10) : 0;
+
+        parent.postMessage({ type: 'HP_REMAIN', payload: { name, stock } }, '*');
+
+        const isFull = target.innerText.includes('全回復');
+        target.click();
+        clearInterval(wH);
+
+        // 回復実行
+        const wF = setInterval(() => {
+            const btn = isFull
+                ? popup.querySelector('input[type="submit"]')
+                : popup.querySelector('a.multi-form-submit');
+
+            if (!btn) return;
+
+            btn.click();
+            clearInterval(wF);
+
+            setTimeout(async () => {
+                const checkDoc = await silentNavigate(window.location.href);
+
+                // 再入院 → 再回復
+                if (checkDoc.body.innerHTML.includes('入院中')) {
+                    window.runHealProcess();
+                } else {
+                    state.phase = 'IDLE';
+                }
+            }, 200);
+
+        }, 50);
+
+    }, 150);
 };
 
 
