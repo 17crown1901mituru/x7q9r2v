@@ -495,34 +495,56 @@
     const state = window.state;
 
     // --- [1] マイページ解析ロジック（抗争予約） ---
-    window.analyzeMyPage = async function() {
-        if (state.isWarActive || !location.href.includes('/mypage')) return;
+    window.analyzeMyPage = async function () {
+    if (state.isWarActive || !location.href.includes('/mypage')) return;
 
-        const links = Array.from(document.querySelectorAll('a'));
-        const battleLink = links.find(a => a.innerText.includes('と抗争勃発!!'));
+    const links = Array.from(document.querySelectorAll('a'));
+    const battleLink = links.find(a => a.innerText.includes('と抗争勃発!!'));
+    if (!battleLink) return; // リンクが無ければ終了（例外防止）
 
-        if (battleLink) {
-            const idMatch = battleLink.href.match(/team_id=(\d+)/);
-            const containerText = battleLink.parentElement.innerText;
-            const timeMatch = containerText.match(/(\d+)月(\d+)日\s*(\d+)時(\d+)分開戦/);
+    // 親要素が無い場合の例外防止
+    const container = battleLink.parentElement;
+    if (!container) return;
 
-            if (idMatch && timeMatch) {
-                state.teamId = idMatch[1];
-                const [_, month, day, hour, min] = timeMatch;
-                const now = new Date();
-                state.startTime = new Date(now.getFullYear(), month - 1, day, hour, min, 0).getTime();
+    const containerText = container.innerText;
 
-                // 新しい抗争開始前にログをリセット
-                state.resetLogs();
+    // ★ 修正ポイント：全フォーマット対応の正規表現
+    // 01/05 21時11分開戦
+    // 1/5 21時11分開戦
+    // 1月5日 21時11分開戦
+    // 01月05日 21時11分開戦
+    const timeMatch = containerText.match(
+        /(\d{1,2})[\/月](\d{1,2})[\/日]?\s*(\d{1,2})時(\d{1,2})分開戦/
+    );
 
-                state.isWarActive = true;
-                state.logs.action.push(`[${new Date().toLocaleTimeString()}] 解析成功: ID ${state.teamId} / ${hour}:${min}開戦を予約`);
-                state.saveLogs();
+    if (!timeMatch) {
+        // 解析失敗ログ（例外を出さず安全に終了）
+        state.logs.action.push(
+            `[${new Date().toLocaleTimeString()}] 解析失敗: 時刻フォーマット不一致`
+        );
+        state.saveLogs();
+        return;
+    }
 
-                setupAssaultTimer(state.startTime);
-            }
-        }
-    };
+    const [, month, day, hour, min] = timeMatch;
+
+    // 抗争ID抽出
+    const idMatch = battleLink.href.match(/team_id=(\d+)/);
+    if (!idMatch) return;
+
+    state.teamId = idMatch[1];
+    state.startTime = `${month}/${day} ${hour}:${min}`;
+
+    // 解析成功ログ
+    state.logs.action.push(
+        `[${new Date().toLocaleTimeString()}] 解析成功: ID ${state.teamId} / ${hour}:${min}開戦を予約`
+    );
+    state.saveLogs();
+
+    // フラグセット
+    state.isWarActive = true;
+    state.saveState();
+};
 
     // --- [2] 突撃タイマー ---
     function setupAssaultTimer(targetMs) {
