@@ -258,108 +258,150 @@
      * iframe → 表：残数・ログ・抗争終了通知
      ******************************************************/
     window.addEventListener('message', (ev) => {
-        if (!ev.data) return;
+    if (!ev.data) return;
 
-        if (ev.data.type === 'HP_REMAIN') {
-            const { name, stock } = ev.data.payload;
-            const idx = state.availableItems.findIndex(x => x.name === name);
-            if (idx >= 0) state.availableItems[idx].stock = stock;
-            else state.availableItems.push({ name, stock });
-            state.updateUI();
-        } else if (ev.data.type === 'LOG_ACTION') {
+    // --- HP残数 ---
+    if (ev.data.type === 'HP_REMAIN') {
+        const { name, stock } = ev.data.payload;
+        const idx = state.availableItems.findIndex(x => x.name === name);
+        if (idx >= 0) state.availableItems[idx].stock = stock;
+        else state.availableItems.push({ name, stock });
+        state.updateUI();
+    }
+
+    // --- 行動ログ（表側は連続除外） ---
+    else if (ev.data.type === 'LOG_ACTION') {
+
+        // ★ 直前のログと同じ内容なら “表側には送らない”
+        const last = state.logs.action[state.logs.action.length - 1];
+        if (last && last.endsWith(ev.data.text)) {
+            // 裏エンジン側には保存するが、表ログには送らない
             state.logs.action.push(ev.data.text);
             state.saveLogs();
-            if (state.logWindow && !state.logWindow.closed) {
-                state.logWindow.postMessage({ type: 'action', text: ev.data.text }, '*');
-            }
-        } else if (ev.data.type === 'LOG_TRAFFIC') {
-            state.logs.traffic.push(ev.data.text);
-            state.saveLogs();
-            if (state.logWindow && !state.logWindow.closed) {
-                state.logWindow.postMessage({ type: 'traffic', text: ev.data.text }, '*');
-            }
-        } else if (ev.data.type === 'WAR_FINISHED') {
-            state.isWarActive = false;
-            state.phase = 'IDLE';
-            state.loggingActive = false;
-            if (state.warIframe && state.warIframe.parentNode) {
-                state.warIframe.parentNode.removeChild(state.warIframe);
-                state.warIframe = null;
-            }
-            // ★ 抗争終了後はリザルトページへ
-            window.location.href = '/war/result';
+            return;
         }
-    });
+
+        // ★ 通常処理（表にも送る）
+        state.logs.action.push(ev.data.text);
+        state.saveLogs();
+
+        if (state.logWindow && !state.logWindow.closed) {
+            state.logWindow.postMessage({ type: 'action', text: ev.data.text }, '*');
+        }
+    }
+
+    // --- 通信ログ（必要なら同じフィルターを付けてもOK） ---
+    else if (ev.data.type === 'LOG_ACTION') {
+    const current = ev.data.text.replace(/^\[\d{2}:\d{2}:\d{2}\]\s*/, '');
+    const lastRaw = state.logs.action[state.logs.action.length - 1];
+    const last = lastRaw ? lastRaw.replace(/^\[\d{2}:\d{2}:\d{2}\]\s*/, '') : '';
+
+    if (last === current) {
+        state.logs.action.push(ev.data.text);
+        state.saveLogs();
+        return;
+    }
+
+    state.logs.action.push(ev.data.text);
+    state.saveLogs();
+
+    if (state.logWindow && !state.logWindow.closed) {
+        state.logWindow.postMessage({ type: 'action', text: ev.data.text }, '*');
+    }
+}
+
+    // --- 抗争終了 ---
+    else if (ev.data.type === 'WAR_FINISHED') {
+        state.isWarActive = false;
+        state.phase = 'IDLE';
+        state.loggingActive = false;
+
+        if (state.warIframe && state.warIframe.parentNode) {
+            state.warIframe.parentNode.removeChild(state.warIframe);
+            state.warIframe = null;
+        }
+
+        window.location.href = '/war/result';
+    }
+});
 
     /******************************************************
      * 抗争状態の UI 判定（新仕様）
      ******************************************************/
     function detectWarUI() {
-        const links = Array.from(document.querySelectorAll('a'));
-        const battleLink = links.find(a => a.innerText.includes('と抗争勃発!!'));
+    // ★ links が未定義だったので追加（これが無いと detectWarUI が毎回クラッシュ）
+    const links = Array.from(document.querySelectorAll('a'));
 
-        const warIcon = document.querySelector('#header_menu a:nth-child(3) img[alt="抗争"], img[alt="抗争"]');
+    // ★ 実際のテキストに対応した battleLink 検知
+    const battleLink = links.find(a => {
+        const raw = a.innerText || "";
+        const text = raw.replace(/\s+/g, ''); // 改行・空白除去
+        return text.includes('と抗争勃発!!');
+    });
 
-        const hasBattleLink = !!battleLink;
-        const hasWarIcon    = !!warIcon;
+    // ★ warIcon はそのまま（ただし null の可能性が高いので fallback として残す）
+    const warIcon = document.querySelector('#header_menu a:nth-child(3) img[alt="抗争"], img[alt="抗争"]');
 
-        // 抗争予約中：勃発リンクあり
-        if (hasBattleLink) {
-            const container = battleLink.parentElement;
-            if (container) {
-                const txt = container.innerText;
-                const m = txt.match(/(\d{1,2})[\/月](\d{1,2})[\/日]?\s*(\d{1,2})時(\d{1,2})分開戦/);
-                const idMatch = battleLink.href.match(/team_id=(\d+)/);
-                if (m && idMatch) {
-                    const [, month, day, hour, min] = m;
-                    const teamId = idMatch[1];
-                    const year = new Date().getFullYear();
-                    const target = new Date(`${year}/${month}/${day} ${hour}:${min}:00`);
+    const hasBattleLink = !!battleLink;
+    const hasWarIcon    = !!warIcon;
 
-                    const newStartTime = target.getTime();
-                    const changed = (state.teamId !== teamId) || (state.startTime !== newStartTime);
+    // 抗争予約中：勃発リンクあり
+    if (hasBattleLink) {
+        const container = battleLink.parentElement;
+        if (container) {
+            const txt = container.innerText;
+            const m = txt.match(/(\d{1,2})[\/月](\d{1,2})[\/日]?\s*(\d{1,2})時(\d{1,2})分開戦/);
+            const idMatch = battleLink.href.match(/team_id=(\d+)/);
+            if (m && idMatch) {
+                const [, month, day, hour, min] = m;
+                const teamId = idMatch[1];
+                const year = new Date().getFullYear();
+                const target = new Date(`${year}/${month}/${day} ${hour}:${min}:00`);
 
-                    if (changed) {
-                        state.teamId = teamId;
-                        state.startTime = newStartTime;
-                        state.isTimerRunning = false;
-                        if (state.scheduleTimerId) {
+                const newStartTime = target.getTime();
+                const changed = (state.teamId !== teamId) || (state.startTime !== newStartTime);
+
+                if (changed) {
+                    state.teamId = teamId;
+                    state.startTime = newStartTime;
+                    state.isTimerRunning = false;
+                    if (state.scheduleTimerId) {
+                        clearInterval(state.scheduleTimerId);
+                        state.scheduleTimerId = null;
+                    }
+                }
+
+                if (!state.isTimerRunning) {
+                    state.isTimerRunning = true;
+                    state.scheduleTimerId = setInterval(() => {
+                        if (Date.now() >= state.startTime - 1500) {
                             clearInterval(state.scheduleTimerId);
                             state.scheduleTimerId = null;
+                            createWarIframe();
                         }
-                    }
-
-                    if (!state.isTimerRunning) {
-                        state.isTimerRunning = true;
-                        state.scheduleTimerId = setInterval(() => {
-                            if (Date.now() >= state.startTime - 1500) {
-                                clearInterval(state.scheduleTimerId);
-                                state.scheduleTimerId = null;
-                                createWarIframe();
-                            }
-                        }, 100);
-                    }
+                    }, 100);
                 }
             }
         }
+    }
 
-        // 抗争中ログイン：抗争アイコンあり
-        if (hasWarIcon && !state.isWarActive) {
-            state.isWarActive = true;
-            createWarIframe(true);
-        }
+    // 抗争中ログイン：抗争アイコンあり
+    if (hasWarIcon && !state.isWarActive) {
+        state.isWarActive = true;
+        createWarIframe(true);
+    }
 
-        // 抗争なし：勃発リンクも抗争アイコンも無い
-        if (!hasBattleLink && !hasWarIcon && state.isWarActive) {
-            state.isWarActive = false;
-            state.phase = 'IDLE';
-            state.loggingActive = false;
-            if (state.warIframe && state.warIframe.parentNode) {
-                state.warIframe.parentNode.removeChild(state.warIframe);
-                state.warIframe = null;
-            }
+    // 抗争なし：勃発リンクも抗争アイコンも無い
+    if (!hasBattleLink && !hasWarIcon && state.isWarActive) {
+        state.isWarActive = false;
+        state.phase = 'IDLE';
+        state.loggingActive = false;
+        if (state.warIframe && state.warIframe.parentNode) {
+            state.warIframe.parentNode.removeChild(state.warIframe);
+            state.warIframe = null;
         }
     }
+}
 
     /******************************************************
      * iframe 生成（新仕様）
@@ -389,7 +431,7 @@
      * 初期起動：マイページで UI 判定開始
      ******************************************************/
     function initUIWarDetection() {
-        if (!location.href.includes('/mypage')) return;
+        if (!location.pathname.match(/^\/my/)) return;
         detectWarUI();
         setInterval(detectWarUI, 1000);
     }
@@ -431,15 +473,21 @@
     /******************************************************
      * 設定受信（表タブから）
      ******************************************************/
-    window.addEventListener('message', (ev) => {
-        if (!ev.data || ev.data.type !== 'WAR_CONFIG') return;
-        const cfg = ev.data.payload;
-        if (cfg.repairEnabled !== undefined) state.repairEnabled = cfg.repairEnabled;
-        if (cfg.equipMode     !== undefined) state.equipMode     = cfg.equipMode;
-        if (cfg.targetHpName  !== undefined) state.targetHpName  = cfg.targetHpName;
-        if (cfg.delayMs       !== undefined) state.delayMs       = cfg.delayMs;
-        state.saveSettings();
-    });
+    window.addEventListener('message', ev => {
+    if (!ev.data || !ev.data.type) return;
+
+    if (ev.data.type === 'LOG_ACTION') {
+        const line = ev.data.text;
+        state.logs.action.push(line);
+        updateLogUI(); // ← 表示更新関数（あなたのUIに合わせて）
+    }
+
+    if (ev.data.type === 'LOG_TRAFFIC') {
+        const line = ev.data.text;
+        state.logs.traffic.push(line);
+        updateLogUI(); // ← 同上
+    }
+});
 
     /******************************************************
      * fetch フック（iframe内のみ・新仕様）
