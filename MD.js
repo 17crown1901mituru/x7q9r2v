@@ -3,6 +3,7 @@
 // @namespace    https://viayoo.com/ekt6gu
 // @version      1.0.0
 // @match        https://tantora.jp/*
+// @author       光琉✞みつる
 // @grant        none
 // @run-at       document-start
 // ==/UserScript==
