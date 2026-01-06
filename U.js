@@ -2,24 +2,26 @@
  * UI（右上パネル）
  ******************************************************/
 (function() {
-    if (window !== window.parent) return;
+    'use strict';
+    if (window.self !== window.top) return; // iframeでは動かさない
 
-    const state = window.state;
+    // ★ DOMContentLoaded を待つ（旧版と同じ挙動）
+    window.addEventListener('DOMContentLoaded', () => {
 
-    if (document.getElementById('tmx-shadow-container')) return;
+        const state = window.state;
 
-    const container = document.createElement('div');
-    container.id = 'tmx-shadow-container';
-    const shadow = container.attachShadow({mode: 'open'});
-    document.documentElement.appendChild(container);
+        if (document.getElementById('tmx-shadow-container')) return;
 
-    const root = document.createElement('div');
-    root.style.cssText = `
-        position:fixed;top:10px;right:2px;z-index:2147483647;
-        width:54px;display:flex;flex-direction:column;gap:4px;
-    `;
+        const container = document.createElement('div');
+        container.id = 'tmx-shadow-container';
+        const shadow = container.attachShadow({mode: 'open'});
+        document.documentElement.appendChild(container);
 
-    const style = document.createElement('style');
+        const root = document.createElement('div');
+        root.style.cssText =
+            'position:fixed;top:10px;right:2px;z-index:2147483647;width:54px;display:flex;flex-direction:column;gap:4px;';
+
+        const style = document.createElement('style');
     style.textContent = `
         .btn { width:54px;height:48px;background:#000;border:1px solid #666;
                font-size:10px;text-align:center;color:#fff;cursor:pointer;
