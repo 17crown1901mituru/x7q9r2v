@@ -1,0 +1,268 @@
+/******************************************************
+ * Part 5-2：裏エンジン（回復・修理・ST/SP・HP残数送信）
+ ******************************************************/
+(function() {
+    'use strict';
+
+    // ★ iframe 内のみ動作
+    if (window === window.parent) return;
+
+    const state = window.state;
+    const silentNavigate = window.silentNavigate;
+
+    /******************************************************
+     * 修理 → HP回復シーケンス
+     ******************************************************/
+    window.runHealSequence = async function() {
+        state.phase = 'REPAIR';
+
+        // 修理OFFなら即HP回復へ
+        if (!state.repairEnabled) {
+            window.runHealProcess();
+            return;
+        }
+
+        // 修理確認ページへ
+        await silentNavigate('/item/repair-confirm');
+
+        const wR = setInterval(() => {
+            const sub = document.querySelector('input[type="submit"]');
+
+            if (sub) {
+                sub.click();
+                clearInterval(wR);
+                window.runHealProcess();
+                return;
+            }
+
+            // 修理不要 or 失敗
+            if (
+                document.body.innerText.includes('修理する必要はありません') ||
+                document.body.innerText.includes('修理失敗')
+            ) {
+                clearInterval(wR);
+                state.phase = 'IDLE';
+                window.runHealProcess();
+                return;
+            }
+        }, 50);
+    };
+
+    /******************************************************
+     * HP回復（Mode A/B/N・FREE・指定アイテム）
+     ******************************************************/
+    window.runHealProcess = async function() {
+        state.phase = 'HEAL';
+
+        const targetUrl = state.teamId
+            ? `/war/member-list/${state.teamId}`
+            : '/war/member-list';
+
+        await silentNavigate(targetUrl);
+
+        const wH = setInterval(() => {
+            const popup = document.querySelector('.popupWindowContents');
+
+            // 回復ポップアップが出ていなければ heal ボタンを押す
+            if (!popup) {
+                document.querySelector('img[src*="footer_heal.png"]')
+                    ?.parentElement?.click();
+                return;
+            }
+
+            /******************************************************
+             * Mode A/B/N 選択
+             ******************************************************/
+            const mIdx = { 'A': 0, 'B': 1, 'N': 2 }[state.equipMode];
+            popup.querySelectorAll('input[name="select_preset_radio"]')[mIdx]?.click();
+
+            /******************************************************
+             * HPアイテム選択
+             ******************************************************/
+            const items = Array.from(popup.querySelectorAll('li.itemHP'));
+
+            const target = (state.targetHpName === 'FREE')
+                ? items[0]
+                : items.find(li => li.innerText.includes(state.targetHpName));
+
+            if (!target) return;
+
+            // アイテム名
+            const name = state.targetHpName === 'FREE'
+                ? (target.innerText.split('\n')[0] || 'FREE')
+                : state.targetHpName;
+
+            // 残数
+            const remainMatch = target.innerText.match(/残り(\d+)/);
+            const stock = remainMatch ? parseInt(remainMatch[1], 10) : 0;
+
+            // ★ HP残数を親へ送信
+            parent.postMessage({
+                type: 'HP_REMAIN',
+                payload: { name, stock }
+            }, '*');
+
+            const isFull = target.innerText.includes('全回復');
+
+            target.click();
+            clearInterval(wH);
+
+            /******************************************************
+             * 回復実行
+             ******************************************************/
+            const wF = setInterval(() => {
+                const btn = isFull
+                    ? popup.querySelector('input[type="submit"]')
+                    : popup.querySelector('a.multi-form-submit');
+
+                if (!btn) return;
+
+                btn.click();
+                clearInterval(wF);
+
+                // 回復後の状態確認
+                setTimeout(async () => {
+                    const checkDoc = await silentNavigate(window.location.href);
+
+                    if (checkDoc.body.innerHTML.includes('入院中')) {
+                        // まだ入院 → 再回復
+                        window.runHealProcess();
+                    } else {
+                        state.phase = 'IDLE';
+                    }
+                }, 200);
+            }, 50);
+        }, 150);
+    };
+
+    /******************************************************
+     * ST / SP 回復
+     ******************************************************/
+    window.executeStatRecovery = async function(type) {
+        if (state.phase !== 'IDLE') return;
+
+        state.phase = 'STAT_HEAL';
+        const logLabel = (type === 'ST') ? 'ST' : 'SP';
+
+        await silentNavigate('/item/use-list');
+
+        let wF = null;
+
+        const wS = setInterval(() => {
+            const itemRows = Array.from(document.querySelectorAll('li, .item-box'));
+
+            const targetItem = itemRows.find(row => {
+                const text = row.innerText;
+
+                // HPアイテムは除外
+                if (/ｈｐ|ＨＰ|hp|HP/.test(text)) return false;
+
+                if (type === 'ST') {
+                    return text.includes('ST') && (text.includes('回復') || text.includes('全快'));
+                } else {
+                    return text.includes('SP') && (text.includes('回復') || text.includes('全快'));
+                }
+            });
+
+            if (targetItem) {
+                const useBtn = targetItem.querySelector('a, input[type="submit"], .use-button');
+
+                if (useBtn) {
+                    useBtn.click();
+                    clearInterval(wS);
+
+                    wF = setInterval(() => {
+                        const confirmBtn = document.querySelector(
+                            'input[type="submit"][value*="使用"], .confirm-button'
+                        );
+
+                        if (confirmBtn) {
+                            confirmBtn.click();
+                            clearInterval(wF);
+
+                            setTimeout(async () => {
+                                const targetUrl = state.teamId
+                                    ? `/war/member-list/${state.teamId}`
+                                    : '/war/member-list';
+
+                                await silentNavigate(targetUrl);
+                                state.phase = 'IDLE';
+                            }, 200);
+                        }
+                    }, 50);
+                }
+            }
+        }, 50);
+    };
+
+    /******************************************************
+     * 初期化（突撃成功 → ロギング開始）
+     ******************************************************/
+    (function init() {
+        if (location.href.includes('/war/member-list/')) {
+            state.loggingActive = true;
+            state.isWarActive = true;
+        }
+    })();
+
+})();        }
+
+        // --- 3. ST/SPリカバリー (生存中: 規定値で即回復・着替えなし) ---
+        const status = await page.evaluate(() => {
+            const getVal = (id) => {
+                const el = document.getElementById(id);
+                return el ? parseInt(el.innerText.replace(/[^0-9]/g, '')) : null;
+            };
+            return { st: getVal('st_gauge_value'), sp: getVal('sp_gauge_value') };
+        });
+
+        const needSt = (status.st === 0 && config.itemType === 'ST');
+        const needSp = (status.sp !== null && status.sp <= 400 && config.itemType === 'SP');
+
+        if (needSt || needSp) {
+            await page.goto('https://tantora.jp/war/index');
+            await page.evaluate((it) => {
+                // 着替えなしで直接アイテム使用
+                if (it.isFull) {
+                    document.querySelector(`li[onclick*='${it.itemId}']`)?.click();
+                } else {
+                    const form = document.querySelector(`#itemUseMultiForm${it.itemId}`);
+                    if (form) form.submit();
+                }
+            }, config);
+            return;
+        }
+
+        // 入院表示がなければブロック解除
+        if (!text.includes('入院中')) {
+            await page.evaluate(() => { window.tmxAdmitted = false; });
+        }
+
+        // --- 4. アイテムリスト同期 (HP種を含むアイテムのみ) ---
+        if (text.includes('class="itemHP"')) {
+            await page.evaluate((htmlText) => {
+                const parser = new DOMParser();
+                const doc = parser.parseFromString(htmlText, 'text/html');
+                const hpItems = {};
+                
+                // itemHPクラスを持つ要素のみに限定
+                doc.querySelectorAll('li.itemHP').forEach(li => {
+                    const oc = li.getAttribute('onclick') || "";
+                    const idMatch = oc.match(/item_status_one(\d+)/);
+                    if (!idMatch) return;
+                    
+                    const id = idMatch[1];
+                    hpItems[id] = {
+                        name: li.querySelector('p:first-child')?.innerText.trim(),
+                        count: li.querySelector('p:nth-child(2)')?.innerText.replace(/[^0-9]/g, ''),
+                        limit: li.querySelector('p:last-child')?.innerText.replace('残り', '').replace('回', '').trim(),
+                        isFull: li.innerHTML.includes('全回復'),
+                        type: 'HP'
+                    };
+                });
+                window.allItemDetails = hpItems; // UIに反映
+            }, text);
+        }
+    });
+})();
+
