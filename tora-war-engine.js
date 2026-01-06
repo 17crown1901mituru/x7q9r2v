@@ -1,7 +1,7 @@
 // ==UserScript==
-// @name         Tantora Ultra Engine V16 (UI+iframe full refresh)
+// @name         Tantora Recovery Engine (Unified)
 // @namespace    https://viayoo.com/ekt6gu
-// @version      16.0.1
+// @version      1.0.0
 // @match        https://tantora.jp/*
 // @author       光琉✞みつる
 // @grant        none
@@ -9,85 +9,58 @@
 // ==/UserScript==
 
 /******************************************************
- * 共通初期化（UI / iframe 共通 state）
+ * 共通 state 初期化
  ******************************************************/
 (function() {
-    'use strict';
-
-    const STORAGE_KEY_SETTINGS = 'tmx_v15_settings';
-    const STORAGE_KEY_LOGS     = 'tmx_v15_logs';
+    const STORAGE_KEY_SETTINGS = 'tmx_settings';
+    const STORAGE_KEY_LOGS     = 'tmx_logs';
 
     const savedSettings = JSON.parse(localStorage.getItem(STORAGE_KEY_SETTINGS) || '{}');
     const savedLogs     = JSON.parse(localStorage.getItem(STORAGE_KEY_LOGS) || '{}');
 
-    if (!window.state) {
-        window.state = {
-            // 既存設定
-            flowFlag: 0,
-            repairEnabled: savedSettings.repairEnabled || false,
-            equipMode:     savedSettings.equipMode     || 'N',
-            targetHpName:  savedSettings.hpName        || 'FREE',
-            delayMs:       savedSettings.delayMs !== undefined ? savedSettings.delayMs : 0,
+    window.state = {
+        repairEnabled: savedSettings.repairEnabled || false,
+        equipMode:     savedSettings.equipMode     || 'N',
+        targetHpName:  savedSettings.hpName        || 'FREE',
+        delayMs:       savedSettings.delayMs !== undefined ? savedSettings.delayMs : 0,
 
-            // 抗争状態管理（新仕様）
-            phase:          'IDLE',   // IDLE / RUNNING / REPAIR / HEAL / STAT_HEAL
-            availableItems: [],
-            enemyTeamId:    null,
-            teamId:         null,
-            startTime:      null,
-            isTimerRunning: false,
-            isWarActive:    false,
-            loggingActive:  false,
-            scheduleTimerId: null,
-            warIframe:      null,
-            logWindow:      null,
+        phase: 'IDLE',
+        availableItems: [],
+        enemyName: 'UNKNOWN',
+        isWarActive: false,
+        warIframe: null,
 
-            logs: {
-                action:  Array.isArray(savedLogs.action)  ? savedLogs.action  : [],
-                traffic: Array.isArray(savedLogs.traffic) ? savedLogs.traffic : []
-            },
+        logs: {
+            front:   savedLogs.front   || [],
+            action:  savedLogs.action  || [],
+            traffic: savedLogs.traffic || []
+        },
 
-            saveSettings() {
-                localStorage.setItem(STORAGE_KEY_SETTINGS, JSON.stringify({
-                    repairEnabled: this.repairEnabled,
-                    equipMode:     this.equipMode,
-                    hpName:        this.targetHpName,
-                    delayMs:       this.delayMs
-                }));
-            },
+        saveSettings() {
+            localStorage.setItem(STORAGE_KEY_SETTINGS, JSON.stringify({
+                repairEnabled: this.repairEnabled,
+                equipMode:     this.equipMode,
+                hpName:        this.targetHpName,
+                delayMs:       this.delayMs
+            }));
+        },
 
-            saveLogs() {
-                localStorage.setItem(STORAGE_KEY_LOGS, JSON.stringify({
-                    action:  this.logs.action,
-                    traffic: this.logs.traffic,
-                    teamId:  this.teamId,
-                    startTime: this.startTime
-                }));
-            },
-
-            resetLogs() {
-                this.logs.action  = [];
-                this.logs.traffic = [];
-                this.saveLogs();
-            }
-        };
-    }
-
-    window.originalFetch = window.originalFetch || window.fetch;
+        resetLogs() {
+            this.logs.front   = [];
+            this.logs.action  = [];
+            this.logs.traffic = [];
+        }
+    };
 })();
 
 /******************************************************
- * ここから：表タブ専用（UI・司令塔）
+ * UI（右上パネル）
  ******************************************************/
 (function() {
-    'use strict';
-    if (window !== window.parent) return; // iframeでは動かさない
+    if (window !== window.parent) return;
 
     const state = window.state;
 
-    /******************************************************
-     * UI構築
-     ******************************************************/
     if (document.getElementById('tmx-shadow-container')) return;
 
     const container = document.createElement('div');
@@ -96,13 +69,21 @@
     document.documentElement.appendChild(container);
 
     const root = document.createElement('div');
-    root.style.cssText = 'position:fixed!important;top:10px!important;right:2px!important;z-index:2147483647!important;width:54px!important;display:flex!important;flex-direction:column!important;gap:4px!important;';
+    root.style.cssText = `
+        position:fixed;top:10px;right:2px;z-index:2147483647;
+        width:54px;display:flex;flex-direction:column;gap:4px;
+    `;
 
     const style = document.createElement('style');
     style.textContent = `
-        .btn { width: 54px; height: 48px; background: #000; border: 1px solid #666; font-size: 10px; text-align: center; cursor: pointer; font-weight: bold; color: #fff; display: flex; flex-direction: column; align-items: center; justify-content: center; line-height: 1.2; border-radius: 3px; overflow: hidden; }
-        .disp { width: 54px; height: 32px; background: #111; border: 1px solid #444; font-size: 10px; text-align: center; color: #0f0; display: flex; align-items: center; justify-content: center; border-radius: 3px; font-weight: bold; }
-        .btn:active { background: #333; }
+        .btn { width:54px;height:48px;background:#000;border:1px solid #666;
+               font-size:10px;text-align:center;color:#fff;cursor:pointer;
+               display:flex;flex-direction:column;justify-content:center;
+               border-radius:3px; }
+        .disp { width:54px;height:32px;background:#111;border:1px solid #444;
+                font-size:10px;color:#0f0;display:flex;align-items:center;
+                justify-content:center;border-radius:3px;font-weight:bold; }
+        .btn:active { background:#333; }
     `;
     shadow.appendChild(style);
     shadow.appendChild(root);
@@ -137,34 +118,29 @@
         const cur = state.availableItems?.find(x => x.name === state.targetHpName);
         ui.c.innerHTML = `<span style="font-size:13px;">${cur ? cur.stock : '0'}</span>`;
 
-        if (state.phase === 'IDLE') {
-            ui.l.innerHTML = 'LOG<br>SAVE';
-            ui.l.style.background = '#004400';
-        } else {
-            ui.l.innerHTML = 'RECV<br>NOW';
-            ui.l.style.background = '#440000';
-        }
+        ui.l.innerHTML = 'LOG<br>VIEW';
+        ui.l.style.background = '#004400';
     };
 
     ui.r.onclick = () => {
         state.repairEnabled = !state.repairEnabled;
         state.saveSettings();
         state.updateUI();
-        sendConfigToIframe();
+        window.sendConfigToIframe();
     };
 
     ui.m.onclick = () => {
         state.equipMode = { 'N': 'A', 'A': 'B', 'B': 'N' }[state.equipMode];
         state.saveSettings();
         state.updateUI();
-        sendConfigToIframe();
+        window.sendConfigToIframe();
     };
 
     ui.d.onclick = () => {
         state.delayMs = (state.delayMs + 500) % 2500;
         state.saveSettings();
         state.updateUI();
-        sendConfigToIframe();
+        window.sendConfigToIframe();
     };
 
     ui.i.onclick = () => {
@@ -172,331 +148,109 @@
         state.targetHpName = names[(names.indexOf(state.targetHpName) + 1) % names.length] || 'FREE';
         state.saveSettings();
         state.updateUI();
-        sendConfigToIframe();
+        window.sendConfigToIframe();
     };
 
-    ui.l.onclick = () => {
-        const win = window.open('', '_blank');
-        if (!win) return;
+    ui.l.onclick = () => window.openLogViewer();
 
-        const logs = JSON.parse(localStorage.getItem('tmx_v15_logs') || '{"action":[],"traffic":[]}');
-
-        win.document.write(`
-            <html><head><title>Tantora V15 Logs</title></head>
-            <body style="background:#111;color:#eee;font-family:monospace;padding:20px;">
-                <h1 style="color:#0f0;border-bottom:1px solid:#333;">Action Logs (行動)</h1>
-                <pre id="action" style="background:#000;padding:10px;border:1px solid:#444;white-space:pre-wrap;word-break:break-all;"></pre>
-                <h1 style="color:#0ff;border-bottom:1px solid:#333;">Traffic Logs (通信)</h1>
-                <pre id="traffic" style="background:#000;padding:10px;border:1px solid:#444;white-space:pre-wrap;word-break:break-all;"></pre>
-                <button id="saveAction">Actionログを保存</button>
-                <button id="saveTraffic">Trafficログを保存</button>
-                <script>
-                    const logs = ${JSON.stringify(logs)};
-                    const actionPre = document.getElementById('action');
-                    const trafficPre = document.getElementById('traffic');
-                    actionPre.textContent = (logs.action || []).join('\\n');
-                    trafficPre.textContent = (logs.traffic || []).join('\\n');
-
-                    function saveText(filename, text) {
-                        const blob = new Blob([text], {type: 'text/plain'});
-                        const url = URL.createObjectURL(blob);
-                        const a = document.createElement('a');
-                        a.href = url;
-                        a.download = filename;
-                        document.body.appendChild(a);
-                        a.click();
-                        document.body.removeChild(a);
-                        URL.revokeObjectURL(url);
-                    }
-
-                    document.getElementById('saveAction').onclick = () => {
-                        saveText('tantora_action_logs.txt', actionPre.textContent);
-                    };
-                    document.getElementById('saveTraffic').onclick = () => {
-                        saveText('tantora_traffic_logs.txt', trafficPre.textContent);
-                    };
-
-                    window.addEventListener('message', (ev) => {
-                        if (!ev.data || !ev.data.type || !ev.data.text) return;
-                        if (ev.data.type === 'action') {
-                            actionPre.textContent += '\\n' + ev.data.text;
-                        } else if (ev.data.type === 'traffic') {
-                            trafficPre.textContent += '\\n' + ev.data.text;
-                        }
-                    });
-                </script>
-            </body></html>
-        `);
-        win.document.close();
-        state.logWindow = win;
-    };
-
-    setInterval(() => {
-        if (state.updateUI) state.updateUI();
-    }, 500);
-
+    setInterval(() => state.updateUI(), 500);
     state.updateUI();
+})();
 
-    /******************************************************
-     * 表→iframe 設定送信
-     ******************************************************/
-    function sendConfigToIframe() {
-        const f = state.warIframe;
-        if (!f) return;
-        f.contentWindow.postMessage({
+
+
+/******************************************************
+ * 表エンジン（抗争検知・iframe起動）
+ ******************************************************/
+(function() {
+    if (window !== window.parent) return;
+
+    const state = window.state;
+
+    window.sendConfigToIframe = function() {
+        if (!state.warIframe) return;
+        state.warIframe.contentWindow.postMessage({
             type: 'WAR_CONFIG',
             payload: {
                 repairEnabled: state.repairEnabled,
-                equipMode:     state.equipMode,
-                targetHpName:  state.targetHpName,
-                delayMs:       state.delayMs
+                equipMode: state.equipMode,
+                targetHpName: state.targetHpName,
+                delayMs: state.delayMs
             }
         }, '*');
-    }
+    };
 
-    /******************************************************
-     * iframe → 表：残数・ログ・抗争終了通知
-     ******************************************************/
-    window.addEventListener('message', (ev) => {
-    if (!ev.data) return;
-
-    // --- HP残数 ---
-    if (ev.data.type === 'HP_REMAIN') {
-        const { name, stock } = ev.data.payload;
-        const idx = state.availableItems.findIndex(x => x.name === name);
-        if (idx >= 0) state.availableItems[idx].stock = stock;
-        else state.availableItems.push({ name, stock });
-        state.updateUI();
-    }
-
-    // --- 行動ログ（表側は連続除外） ---
-    else if (ev.data.type === 'LOG_ACTION') {
-
-        // ★ 直前のログと同じ内容なら “表側には送らない”
-        const last = state.logs.action[state.logs.action.length - 1];
-        if (last && last.endsWith(ev.data.text)) {
-            // 裏エンジン側には保存するが、表ログには送らない
-            state.logs.action.push(ev.data.text);
-            state.saveLogs();
-            return;
-        }
-
-        // ★ 通常処理（表にも送る）
-        state.logs.action.push(ev.data.text);
-        state.saveLogs();
-
-        if (state.logWindow && !state.logWindow.closed) {
-            state.logWindow.postMessage({ type: 'action', text: ev.data.text }, '*');
-        }
-    }
-
-    // --- 通信ログ（必要なら同じフィルターを付けてもOK） ---
-    else if (ev.data.type === 'LOG_ACTION') {
-    const current = ev.data.text.replace(/^\[\d{2}:\d{2}:\d{2}\]\s*/, '');
-    const lastRaw = state.logs.action[state.logs.action.length - 1];
-    const last = lastRaw ? lastRaw.replace(/^\[\d{2}:\d{2}:\d{2}\]\s*/, '') : '';
-
-    if (last === current) {
-        state.logs.action.push(ev.data.text);
-        state.saveLogs();
-        return;
-    }
-
-    state.logs.action.push(ev.data.text);
-    state.saveLogs();
-
-    if (state.logWindow && !state.logWindow.closed) {
-        state.logWindow.postMessage({ type: 'action', text: ev.data.text }, '*');
-    }
-}
-
-    // --- 抗争終了 ---
-    else if (ev.data.type === 'WAR_FINISHED') {
-        state.isWarActive = false;
-        state.phase = 'IDLE';
-        state.loggingActive = false;
-
-        if (state.warIframe && state.warIframe.parentNode) {
-            state.warIframe.parentNode.removeChild(state.warIframe);
-            state.warIframe = null;
-        }
-
-        window.location.href = '/war/result';
-    }
-});
-
-    /******************************************************
-     * 抗争状態の UI 判定（新仕様）
-     ******************************************************/
     function detectWarUI() {
-    // ★ links が未定義だったので追加（これが無いと detectWarUI が毎回クラッシュ）
-    const links = Array.from(document.querySelectorAll('a'));
+        if (!location.href.includes('/war/member-list')) return;
 
-    // ★ 実際のテキストに対応した battleLink 検知
-    const battleLink = links.find(a => {
-        const raw = a.innerText || "";
-        const text = raw.replace(/\s+/g, ''); // 改行・空白除去
-        return text.includes('と抗争勃発!!');
-    });
-
-    // ★ warIcon はそのまま（ただし null の可能性が高いので fallback として残す）
-    const warIcon = document.querySelector('#header_menu a:nth-child(3) img[alt="抗争"], img[alt="抗争"]');
-
-    const hasBattleLink = !!battleLink;
-    const hasWarIcon    = !!warIcon;
-
-    // 抗争予約中：勃発リンクあり
-    if (hasBattleLink) {
-        const container = battleLink.parentElement;
-        if (container) {
-            const txt = container.innerText;
-            const m = txt.match(/(\d{1,2})[\/月](\d{1,2})[\/日]?\s*(\d{1,2})時(\d{1,2})分開戦/);
-            const idMatch = battleLink.href.match(/team_id=(\d+)/);
-            if (m && idMatch) {
-                const [, month, day, hour, min] = m;
-                const teamId = idMatch[1];
-                const year = new Date().getFullYear();
-                const target = new Date(`${year}/${month}/${day} ${hour}:${min}:00`);
-
-                const newStartTime = target.getTime();
-                const changed = (state.teamId !== teamId) || (state.startTime !== newStartTime);
-
-                if (changed) {
-                    state.teamId = teamId;
-                    state.startTime = newStartTime;
-                    state.isTimerRunning = false;
-                    if (state.scheduleTimerId) {
-                        clearInterval(state.scheduleTimerId);
-                        state.scheduleTimerId = null;
-                    }
-                }
-
-                if (!state.isTimerRunning) {
-                    state.isTimerRunning = true;
-                    state.scheduleTimerId = setInterval(() => {
-                        if (Date.now() >= state.startTime - 1500) {
-                            clearInterval(state.scheduleTimerId);
-                            state.scheduleTimerId = null;
-                            createWarIframe();
-                        }
-                    }, 100);
-                }
-            }
-        }
-    }
-
-    // 抗争中ログイン：抗争アイコンあり
-    if (hasWarIcon && !state.isWarActive) {
+        state.resetLogs();
         state.isWarActive = true;
-        createWarIframe(true);
-    }
-
-    // 抗争なし：勃発リンクも抗争アイコンも無い
-    if (!hasBattleLink && !hasWarIcon && state.isWarActive) {
-        state.isWarActive = false;
         state.phase = 'IDLE';
-        state.loggingActive = false;
-        if (state.warIframe && state.warIframe.parentNode) {
-            state.warIframe.parentNode.removeChild(state.warIframe);
-            state.warIframe = null;
-        }
-    }
-}
 
-    /******************************************************
-     * iframe 生成（新仕様）
-     ******************************************************/
-    function createWarIframe(fromIcon = false) {
-        if (state.warIframe) return;
+        const enemyName = document.querySelector('.enemyTeamName')?.innerText || 'UNKNOWN';
+        state.enemyName = enemyName;
 
-        const f = document.createElement('iframe');
-        f.style.position = 'fixed';
-        f.style.width = '1px';
-        f.style.height = '1px';
-        f.style.bottom = '0';
-        f.style.right = '0';
-        f.style.border = '0';
+        const iframe = document.createElement('iframe');
+        iframe.src = location.href;
+        iframe.style.cssText = 'position:fixed;left:-9999px;top:-9999px;width:1px;height:1px;';
+        document.body.appendChild(iframe);
 
-        const baseUrl = state.teamId ? `/war/member-list/${state.teamId}` : '/war/member-list';
-        f.src = baseUrl;
-        state.warIframe = f;
-        document.body.appendChild(f);
+        state.warIframe = iframe;
 
-        f.onload = () => {
-            sendConfigToIframe();
-        };
+        iframe.onload = () => window.sendConfigToIframe();
     }
 
-    /******************************************************
-     * 初期起動：マイページで UI 判定開始
-     ******************************************************/
-    function initUIWarDetection() {
-        if (!location.pathname.match(/^\/my/)) return;
-        detectWarUI();
-        setInterval(detectWarUI, 1000);
-    }
-
-    if (document.readyState === 'complete') {
-        initUIWarDetection();
-    } else {
-        window.addEventListener('load', initUIWarDetection);
-    }
+    window.addEventListener('DOMContentLoaded', detectWarUI);
 })();
 
+
+
 /******************************************************
- * ここから：iframe専用エンジン（裏エンジン・観測装置）
+ * 裏エンジン（iframe内）：回復・修理・ST/SP・終了判定
  ******************************************************/
 (function() {
-    'use strict';
-    if (window === window.parent) return; // 表タブでは動かさない
+    if (window === window.parent) return; // iframe内のみ
 
     const state = window.state;
-    const baseFetch = window.originalFetch || window.fetch;
 
     /******************************************************
-     * ログユーティリティ（親へ送信）
+     * ログ関数（iframe → 親へ送信）
      ******************************************************/
     function logAction(msg) {
         const line = `[${new Date().toLocaleTimeString()}] ${msg}`;
         state.logs.action.push(line);
-        if (state.loggingActive) state.saveLogs();
         parent.postMessage({ type: 'LOG_ACTION', text: line }, '*');
     }
 
     function logTraffic(msg) {
-        const line = `[RECV] ${new Date().toLocaleTimeString()}: ${msg}`;
+        const line = `[RECV ${new Date().toLocaleTimeString()}] ${msg}`;
         state.logs.traffic.push(line);
-        if (state.loggingActive) state.saveLogs();
         parent.postMessage({ type: 'LOG_TRAFFIC', text: line }, '*');
     }
 
     /******************************************************
-     * 設定受信（表タブから）
+     * WAR_CONFIG 受信（表 → 裏）
      ******************************************************/
-    window.addEventListener('message', ev => {
-    if (!ev.data || !ev.data.type) return;
+    window.addEventListener('message', (ev) => {
+        if (!ev.data || ev.data.type !== 'WAR_CONFIG') return;
+        const cfg = ev.data.payload;
 
-    if (ev.data.type === 'LOG_ACTION') {
-        const line = ev.data.text;
-        state.logs.action.push(line);
-        updateLogUI(); // ← 表示更新関数（あなたのUIに合わせて）
-    }
-
-    if (ev.data.type === 'LOG_TRAFFIC') {
-        const line = ev.data.text;
-        state.logs.traffic.push(line);
-        updateLogUI(); // ← 同上
-    }
-});
+        if (cfg.repairEnabled !== undefined) state.repairEnabled = cfg.repairEnabled;
+        if (cfg.equipMode     !== undefined) state.equipMode     = cfg.equipMode;
+        if (cfg.targetHpName  !== undefined) state.targetHpName  = cfg.targetHpName;
+        if (cfg.delayMs       !== undefined) state.delayMs       = cfg.delayMs;
+    });
 
     /******************************************************
      * fetch フック（iframe内のみ・新仕様）
      ******************************************************/
+    const baseFetch = window.fetch;
+
     window.fetch = async function(...args) {
         const req = args[0];
         const url = typeof req === 'string' ? req : req.url;
 
-        // 戦闘リクエスト制御
+        // ★ 攻撃リクエスト制御（回復中はブロック）
         if (url.includes('/war/battle?other/')) {
             if (state.phase !== 'IDLE') {
                 logTraffic(`[BLOCKED] ${url}`);
@@ -516,7 +270,9 @@
             const clone = resp.clone();
             const html = await clone.text();
 
-            // ★ 実データ準拠のリザルト判定
+            /******************************************************
+             * ★ 抗争終了判定（実データ準拠）
+             ******************************************************/
             const cond1 = url.includes('/war/result');
             const cond2 =
                 html.includes('との抗争に勝利した') ||
@@ -527,8 +283,17 @@
 
             if (matchCount >= 2) {
                 state.loggingActive = false;
-                state.saveLogs();
-                logAction('抗争終了を検知：ログを確定保存しました。');
+
+                // 結果を抽出
+                if (html.includes('勝利')) state.lastResult = 'WIN';
+                else if (html.includes('敗北')) state.lastResult = 'LOSE';
+                else state.lastResult = 'UNKNOWN';
+
+                // セッション保存
+                if (window.saveCurrentSession) window.saveCurrentSession();
+                if (window.cleanupOldSessions) window.cleanupOldSessions();
+
+                logAction(`抗争終了を検知：ログを確定保存しました。（${state.lastResult}）`);
                 state.isWarActive = false;
                 state.phase = 'IDLE';
 
@@ -541,7 +306,9 @@
                 return resp;
             }
 
-            // 入院検知
+            /******************************************************
+             * 入院検知
+             ******************************************************/
             if (html.includes('<blink>入院中</blink>')) {
                 if (state.phase === 'IDLE') {
                     state.phase = 'REPAIR';
@@ -550,7 +317,9 @@
                 }
             }
 
-            // ST/SP 検知
+            /******************************************************
+             * ST/SP 検知
+             ******************************************************/
             const spMatch = html.match(/sp[^>]*>(\d+)\//i);
             const stMatch = html.match(/st[^>]*>(\d+)\//i);
 
@@ -724,7 +493,7 @@
                         } else if (document.body.innerText.includes('使用しました')) {
                             clearInterval(wF);
                             setTimeout(async () => {
-                                const targetUrl = state.teamId ? `/war/member-list/${state.teamId}` : '/war/member-list';
+                                const targetUrl = state.teamId ? `/war/member-list/${state.teamId}` : '/war/member-list`;
                                 await silentNavigate(targetUrl);
                                 state.phase = 'IDLE';
                             }, 200);
@@ -747,4 +516,130 @@
             logAction('突撃成功 → ロギング開始');
         }
     })();
+})();
+
+
+
+/******************************************************
+ * セッション管理（最大4件）
+ ******************************************************/
+(function() {
+    const state = window.state;
+
+    window.saveCurrentSession = function() {
+        const sessions = JSON.parse(localStorage.getItem('tmx_sessions') || '{}');
+
+        const key = `${formatDate()}_${state.enemyName}_${state.lastResult || 'UNKNOWN'}`;
+
+        sessions[key] = {
+            front: state.logs.front,
+            action: state.logs.action,
+            traffic: state.logs.traffic,
+            timestamp: Date.now()
+        };
+
+        localStorage.setItem('tmx_sessions', JSON.stringify(sessions));
+    };
+
+    window.cleanupOldSessions = function() {
+        let sessions = JSON.parse(localStorage.getItem('tmx_sessions') || '{}');
+        const keys = Object.keys(sessions);
+
+        if (keys.length <= 4) return;
+
+        const sorted = keys.sort((a,b) => sessions[a].timestamp - sessions[b].timestamp);
+
+        while (sorted.length > 4) {
+            const oldest = sorted.shift();
+            delete sessions[oldest];
+        }
+
+        localStorage.setItem('tmx_sessions', JSON.stringify(sessions));
+    };
+
+    function formatDate() {
+        const d = new Date();
+        const y = d.getFullYear();
+        const m = String(d.getMonth()+1).padStart(2,'0');
+        const day = String(d.getDate()).padStart(2,'0');
+        return `${y}-${m}-${day}`;
+    }
+})();
+
+
+/******************************************************
+ * 別タブログビュー（セッション選択＋削除）
+ ******************************************************/
+(function() {
+    window.openLogViewer = function() {
+        const win = window.open('', '_blank');
+        if (!win) return;
+
+        const sessions = JSON.parse(localStorage.getItem('tmx_sessions') || '{}');
+        const keys = Object.keys(sessions).sort();
+        const latestKey = keys[keys.length - 1];
+
+        win.document.write(`
+            <html><head><title>SneakyJS Logs</title></head>
+            <body style="background:#111;color:#eee;font-family:monospace;padding:20px;">
+
+                <h1 style="color:#0f0;">ログセッション選択</h1>
+                <select id="sessionSelect" style="font-size:16px;padding:4px;">
+                    ${keys.map(k => `<option value="${k}" ${k===latestKey?'selected':''}>${k}</option>`).join('')}
+                </select>
+                <button id="deleteSession">このセッションを削除</button>
+
+                <h2 style="color:#d4b106;">Front Logs</h2>
+                <pre id="front" style="background:#000;padding:10px;border:1px solid #444;"></pre>
+
+                <h2 style="color:#52c41a;">Action Logs</h2>
+                <pre id="action" style="background:#000;padding:10px;border:1px solid #444;"></pre>
+
+                <h2 style="color:#1890ff;">Traffic Logs</h2>
+                <pre id="traffic" style="background:#000;padding:10px;border:1px solid #444;"></pre>
+
+                <script>
+                    const sessions = ${JSON.stringify(sessions)};
+                    const select = document.getElementById('sessionSelect');
+
+                    function loadSession(key) {
+                        const s = sessions[key];
+                        document.getElementById('front').textContent   = (s.front   || []).join('\\n');
+                        document.getElementById('action').textContent  = (s.action  || []).join('\\n');
+                        document.getElementById('traffic').textContent = (s.traffic || []).join('\\n');
+                    }
+
+                    loadSession(select.value);
+
+                    select.onchange = () => loadSession(select.value);
+
+                    document.getElementById('deleteSession').onclick = () => {
+                        const key = select.value;
+                        delete sessions[key];
+                        localStorage.setItem('tmx_sessions', JSON.stringify(sessions));
+                        location.reload();
+                    };
+
+                    const latestKey = "${latestKey}";
+                    window.addEventListener('message', (ev) => {
+                        if (select.value !== latestKey) return;
+                        if (!ev.data || !ev.data.type || !ev.data.text) return;
+
+                        if (ev.data.type === 'LOG_FRONT') {
+                            document.getElementById('front').textContent += '\\n' + ev.data.text;
+                        }
+                        if (ev.data.type === 'LOG_ACTION') {
+                            document.getElementById('action').textContent += '\\n' + ev.data.text;
+                        }
+                        if (ev.data.type === 'LOG_TRAFFIC') {
+                            document.getElementById('traffic').textContent += '\\n' + ev.data.text;
+                        }
+                    });
+                </script>
+
+            </body></html>
+        `);
+
+        win.document.close();
+    };
 })();
