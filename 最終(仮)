@@ -1,0 +1,1135 @@
+// ==UserScript==
+// @name         Tora Sync 三層完全統合版（ログ対応版）
+// @namespace    https://tantora.jp/
+// @version      1.1.0
+// @author       光琉✞みつる
+// @description  単虎 抗争用 UI＋表エンジン＋裏エンジンを統合し、修理・回復・ディレイ・ログ管理（timeline）を一括制御するスクリプト
+// @match        https://tantora.jp/*
+// @run-at       document-end
+// @grant        none
+// ==/UserScript==
+
+(function() {
+  "use strict";
+
+  // ============================================================
+  //  共通：簡易ログユーティリティ（front 用）
+  // ============================================================
+  const LOG_KEY = "sneakyjs_front_log";
+
+  function nowStamp() {
+    const d = new Date();
+    const pad = n => String(n).padStart(2, "0");
+    return (
+      `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())} ` +
+      `${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}`
+    );
+  }
+
+  function logLine(msg) {
+    return `[${nowStamp()}] ${msg}`;
+  }
+
+  function sanitizeName(name) {
+    return String(name || "").replace(/[\/\\:*?"<>|]/g, "_");
+  }
+
+  function saveFrontLog(msg) {
+    try {
+      const logs = JSON.parse(localStorage.getItem(LOG_KEY) || "[]");
+      const line = logLine(msg);
+      const last = logs[logs.length - 1];
+      if (last !== line) {
+        logs.push(line);
+        localStorage.setItem(LOG_KEY, JSON.stringify(logs));
+      }
+    } catch (_) {
+      // ログ失敗は無視
+    }
+  }
+
+  // ============================================================
+  //  UI 層（リモコン）
+  //  - tantora.jp 全域で表示
+  //  - UI → front: postMessage(from=tora-ui)
+  //  - front → UI: postMessage(from=tora-front)
+  // ============================================================
+  (function initUI() {
+    if (window.__toraUIInitialized) return;
+    window.__toraUIInitialized = true;
+
+    const state = {
+      collapsed: true,
+      repairEnabled: false,
+      equipMode: "N",
+      delayMs: 0,
+      availableItems: [],
+      hpIndex: 0
+    };
+
+    function injectUICSS() {
+      const css = `
+#tora-ui {
+  position: fixed;
+  top: 10px;
+  right: 10px;
+  z-index: 999999;
+  font-size: 14px;
+  user-select: none;
+}
+#tora-ui.collapsed .tora-btn:not(#btnLog) {
+  display: none;
+}
+.tora-btn {
+  width: 120px;
+  height: 40px;
+  margin-bottom: 6px;
+  background: #333;
+  color: #fff;
+  border-radius: 6px;
+  text-align: center;
+  line-height: 20px;
+  padding-top: 4px;
+  box-sizing: border-box;
+}
+.hp-item {
+  height: 60px;
+  background: #666;
+}
+.hp-count {
+  background: rgba(0,0,0,0.95);
+  color: #0f0;
+}
+#btnLog {
+  background: #09f;
+}
+      `;
+      const style = document.createElement("style");
+      style.textContent = css;
+      document.head.appendChild(style);
+    }
+
+    function createUI() {
+      if (document.getElementById("tora-ui")) return null;
+
+      const root = document.createElement("div");
+      root.id = "tora-ui";
+      root.className = "collapsed";
+
+      root.innerHTML = `
+        <div class="tora-btn" id="btnRepair">Repair<br>OFF</div>
+
+        <div class="tora-btn" id="btnModeA" data-mode="A">A</div>
+        <div class="tora-btn" id="btnModeB" data-mode="B">B</div>
+        <div class="tora-btn" id="btnModeN" data-mode="N">N</div>
+
+        <div class="tora-btn" id="btnDelay0" data-delay="0">Delay OFF</div>
+        <div class="tora-btn" id="btnDelay500" data-delay="500">D:500</div>
+        <div class="tora-btn" id="btnDelay1000" data-delay="1000">D:1000</div>
+        <div class="tora-btn" id="btnDelay1500" data-delay="1500">D:1500</div>
+        <div class="tora-btn" id="btnDelay2000" data-delay="2000">D:2000</div>
+
+        <div class="tora-btn hp-item" id="btnHpItem">---</div>
+        <div class="tora-btn hp-count" id="hpCount">-- / --</div>
+
+        <div class="tora-btn" id="btnLog">LOG</div>
+      `;
+
+      document.body.appendChild(root);
+      return root;
+    }
+
+    function sendToFront(cmd, payload = {}) {
+      window.postMessage({ from: "tora-ui", cmd, payload }, "*");
+    }
+
+    function formatItemName(name) {
+      const trimmed =
+        name.length > 10 ? name.slice(0, 10) + "…" : name;
+      const line1 = trimmed.slice(0, 5);
+      const line2 = trimmed.slice(5);
+      return { line1, line2 };
+    }
+
+    function updateHpItemDisplay(item) {
+      const btn = document.getElementById("btnHpItem");
+      const count = document.getElementById("hpCount");
+      if (!btn || !count) return;
+
+      if (!item) {
+        btn.innerHTML = "---";
+        count.textContent = "-- / --";
+        return;
+      }
+      const { line1, line2 } = formatItemName(item.name || "");
+      btn.innerHTML = `${line1}<br>${line2}`;
+      count.textContent = `${item.remaining ?? "--"} / ${item.remaining ?? "--"}`;
+    }
+
+    function enableDrag(root) {
+      let dragging = false;
+      let sx = 0, sy = 0, ox = 0, oy = 0;
+
+      root.addEventListener("touchstart", e => {
+        if (!state.collapsed) return;
+        dragging = true;
+        const t = e.touches[0];
+        sx = t.clientX;
+        sy = t.clientY;
+        const rect = root.getBoundingClientRect();
+        ox = rect.left;
+        oy = rect.top;
+      });
+
+      root.addEventListener("touchmove", e => {
+        if (!dragging || !state.collapsed) return;
+        const t = e.touches[0];
+        root.style.left = `${ox + (t.clientX - sx)}px`;
+        root.style.top = `${oy + (t.clientY - sy)}px`;
+        root.style.right = "";
+      });
+
+      root.addEventListener("touchend", () => {
+        dragging = false;
+      });
+    }
+
+function toggleUI(root) {
+      state.collapsed = !state.collapsed;
+      if (state.collapsed) {
+        root.classList.add("collapsed");
+        root.classList.remove("expanded");
+      } else {
+        root.classList.add("expanded");
+        root.classList.remove("collapsed");
+        root.style.top = "10px";
+        root.style.right = "10px";
+        root.style.left = "";
+      }
+    }
+
+    function bindLogButton(root) {
+      const btn = document.getElementById("btnLog");
+      let timer = null;
+      const longPress = 600;
+
+      btn.addEventListener("touchstart", () => {
+        timer = setTimeout(() => {
+          if (!state.collapsed) {
+            window.postMessage(
+              { from: "tora-ui", cmd: "ui-open-log-viewer" },
+              "*"
+            );
+          }
+        }, longPress);
+      });
+
+      btn.addEventListener("touchend", () => {
+        if (timer) {
+          clearTimeout(timer);
+          toggleUI(root);
+        }
+      });
+    }
+
+    function bindButtons(root) {
+      const btnRepair = document.getElementById("btnRepair");
+      btnRepair.addEventListener("click", () => {
+        state.repairEnabled = !state.repairEnabled;
+        btnRepair.innerHTML = state.repairEnabled
+          ? "Repair<br>ON"
+          : "Repair<br>OFF";
+        window.postMessage(
+          {
+            from: "tora-ui",
+            cmd: "ui-config",
+            payload: { repairEnabled: state.repairEnabled }
+          },
+          "*"
+        );
+      });
+
+      ["A", "B", "N"].forEach(m => {
+        const btn = document.getElementById("btnMode" + m);
+        btn.addEventListener("click", () => {
+          state.equipMode = m;
+          window.postMessage(
+            {
+              from: "tora-ui",
+              cmd: "ui-config",
+              payload: { equipMode: m }
+            },
+            "*"
+          );
+        });
+      });
+
+      [0, 500, 1000, 1500, 2000].forEach(d => {
+        const id = d === 0 ? "btnDelay0" : "btnDelay" + d;
+        const btn = document.getElementById(id);
+        btn.addEventListener("click", () => {
+          state.delayMs = d;
+          window.postMessage(
+            {
+              from: "tora-ui",
+              cmd: "ui-config",
+              payload: { delayMs: d }
+            },
+            "*"
+          );
+        });
+      });
+
+      const btnHp = document.getElementById("btnHpItem");
+      btnHp.addEventListener("click", () => {
+        if (!state.availableItems.length) return;
+        state.hpIndex =
+          (state.hpIndex + 1) % state.availableItems.length;
+        const item = state.availableItems[state.hpIndex];
+        updateHpItemDisplay(item);
+        window.postMessage(
+          {
+            from: "tora-ui",
+            cmd: "ui-config",
+            payload: { targetHpName: item.name }
+          },
+          "*"
+        );
+      });
+    }
+
+    function bindUIIncoming() {
+      window.addEventListener("message", e => {
+        const { from, cmd, payload } = e.data || {};
+        if (from !== "tora-front") return;
+
+        if (cmd === "ui-update-items") {
+          state.availableItems = payload || [];
+          state.hpIndex = 0;
+          updateHpItemDisplay(state.availableItems[0]);
+        }
+      });
+    }
+
+    function init() {
+      injectUICSS();
+      const root = createUI();
+      if (!root) return;
+      enableDrag(root);
+      bindLogButton(root);
+      bindButtons(root);
+      bindUIIncoming();
+    }
+
+    init();
+  })();
+
+  // ============================================================
+  //  表エンジン（front）
+  // ============================================================
+  (function initFront() {
+    if (!location.pathname.startsWith("/my")) return;
+    if (window.__toraFrontInitialized) return;
+    window.__toraFrontInitialized = true;
+
+    const STORE_KEY = "sneakyjs_next_war";
+
+    let backendFrame = null;
+
+    function loadSavedWar() {
+      try {
+        return JSON.parse(localStorage.getItem(STORE_KEY) || "null");
+      } catch (_) {
+        return null;
+      }
+    }
+
+    function saveWar(info) {
+      localStorage.setItem(STORE_KEY, JSON.stringify(info));
+      saveFrontLog(`抗争情報保存: ${info.rawText}`);
+    }
+
+    function clearWar() {
+      localStorage.removeItem(STORE_KEY);
+      saveFrontLog("抗争情報破棄");
+    }
+
+    function detectWarLink() {
+      const links = Array.from(
+        document.querySelectorAll('a[href*="team/other?team_id="]')
+      );
+      for (const a of links) {
+        const text = a.innerText.replace(/\s+/g, " ").trim();
+        if (!text.includes("勃発!!") || !text.includes("開戦")) continue;
+        const href = a.href;
+        const enemyTeamId = new URL(href).searchParams.get("team_id");
+        const enemyTeamName = text.split("と")[0];
+        const startAt = parseStart(text);
+        return {
+          enemyTeamId,
+          enemyTeamName,
+          startAt,
+          rawText: text
+        };
+      }
+      return null;
+    }
+
+    function detectHeader() {
+      const imgs = Array.from(
+        document.querySelectorAll("#header_menu img, section img")
+      );
+      let war = false,
+        ajito = false;
+      for (const img of imgs) {
+        const src = img.src;
+        if (src.includes("war.jpg")) war = true;
+        if (src.includes("ajito.jpg")) ajito = true;
+      }
+      if (war) return "war";
+      if (ajito) return "ajito";
+      return "none";
+    }
+
+function refreshWarInfo(warInfo, header, saved) {
+      if (warInfo) {
+        if (!saved) return saveWar(warInfo);
+        if (
+          saved.enemyTeamId !== warInfo.enemyTeamId ||
+          saved.startAt !== warInfo.startAt ||
+          saved.rawText !== warInfo.rawText
+        ) {
+          return saveWar(warInfo);
+        }
+        return;
+      }
+      if (header === "ajito" && saved) clearWar();
+    }
+
+    function schedule(saved, header) {
+      if (header === "war") {
+        startBackendNow();
+        return;
+      }
+
+      if (!saved) return;
+
+      const now = Date.now();
+      const diff = saved.startAt - now;
+
+      if (diff <= 2000) {
+        clearWar();
+        startBackendNow();
+        return;
+      }
+
+      if (diff <= 10000) {
+        ensureIframe(saved);
+        setTimeout(() => {
+          clearWar();
+          startBackendNow();
+        }, diff - 2000);
+        return;
+      }
+
+      setTimeout(() => schedule(saved, detectHeader()), 1000);
+    }
+
+    function ensureIframe(saved) {
+      if (document.getElementById("sneakyjs-war-iframe")) return;
+
+      const iframe = document.createElement("iframe");
+      iframe.id = "sneakyjs-war-iframe";
+      iframe.src = "https://tantora.jp/team/war";
+      iframe.style.position = "fixed";
+      iframe.style.bottom = "0";
+      iframe.style.right = "0";
+      iframe.style.width = "100%";
+      iframe.style.height = "50%";
+      iframe.style.border = "none";
+      iframe.style.zIndex = "2147483647";
+      document.body.appendChild(iframe);
+
+      iframe.onload = () => {
+        iframe.contentWindow.postMessage(
+          {
+            from: "tora-front",
+            cmd: "backend-start",
+            payload: {
+              enemyTeamName: saved?.enemyTeamName || "",
+              startAt: saved?.startAt || Date.now()
+            }
+          },
+          "*"
+        );
+      };
+
+      backendFrame = iframe;
+      saveFrontLog("裏エンジン準備（iframe生成）");
+    }
+
+    function startBackendNow() {
+      ensureIframe(loadSavedWar());
+      saveFrontLog("裏エンジン即時始動");
+    }
+
+    // ★★★ この handleBackendSession は Part4 で timeline 対応版に差し替える ★★★
+    function handleBackendSession({ session, logs }) {
+      const fileName = `${session.sessionId}_${sanitizeName(
+        session.enemyTeamName
+      )}_${session.result}`;
+      saveFrontLog(`裏ログ受信 → ${fileName}`);
+      try {
+        localStorage.setItem(
+          `session_${fileName}`,
+          JSON.stringify({ session, logs })
+        );
+      } catch (_) {
+        // 保存失敗は無視
+      }
+    }
+
+    function parseStart(text) {
+      const re = /(\d{2})\/(\d{2})\s+(\d{1,2})時(\d{1,2})分開戦/;
+      const m = text.match(re);
+      const now = new Date();
+      if (!m) return now.getTime();
+      return new Date(
+        now.getFullYear(),
+        m[1] - 1,
+        m[2],
+        m[3],
+        m[4]
+      ).getTime();
+    }
+
+    function sendToBackend(cmd, payload = {}) {
+      const iframe = backendFrame || document.getElementById("sneakyjs-war-iframe");
+      if (!iframe || !iframe.contentWindow) return;
+      iframe.contentWindow.postMessage(
+        { from: "tora-front", cmd, payload },
+        "*"
+      );
+    }
+
+    function sendToUI(cmd, payload = {}) {
+      window.postMessage({ from: "tora-front", cmd, payload }, "*");
+    }
+
+    // UI → front
+    window.addEventListener("message", e => {
+      const { from, cmd, payload } = e.data || {};
+      if (from !== "tora-ui") return;
+
+      if (cmd === "ui-config") {
+        sendToBackend("backend-config", payload);
+      }
+
+      if (cmd === "ui-open-log-viewer") {
+        window.open("https://tantora.jp/my", "_blank");
+      }
+    });
+
+    // backend → front
+    window.addEventListener("message", e => {
+      const { from, cmd, payload } = e.data || {};
+      if (from !== "tora-backend") return;
+
+      if (cmd === "backend-state") {
+        if (payload.availableItems) {
+          sendToUI("ui-update-items", payload.availableItems);
+        }
+      }
+
+      // ★★★ この backend-session-complete は Part4 で backend-session に変更される ★★★
+      if (cmd === "backend-session-complete") {
+        handleBackendSession(payload);
+      }
+    });
+
+    (function main() {
+      const warInfo = detectWarLink();
+      const header = detectHeader();
+      const saved = loadSavedWar();
+
+      refreshWarInfo(warInfo, header, saved);
+      const updated = loadSavedWar();
+      schedule(updated, header);
+    })();
+  })();
+
+  // ============================================================
+  //  裏エンジン（backend）
+  // ============================================================
+  (function initBackend() {
+    if (window.__toraBackendEngineLoaded) return;
+    window.__toraBackendEngineLoaded = true;
+
+    const state = {
+      phase: "IDLE",
+      delayMs: 0,
+      repairEnabled: true,
+      equipMode: "A",
+      targetHpName: "FREE",
+      lastStatus: {
+        hpNow: null,
+        hpMax: null,
+        stNow: null,
+        stMax: null,
+        spNow: null,
+        spMax: null,
+        hospitalized: false
+      },
+      stConfig: { threshold: 5, itemId: 1719 },
+      spConfig: { threshold: 100, itemId: 1721 },
+      enemyTeamId: null,
+      availableItems: [],
+
+      // ★★★ Part5 で logs.action → logs.action + logs.response に拡張する ★★★
+      logs: { action: [] },
+
+      session: null,
+      warEnded: false
+    };
+
+// ============================================================
+    //  裏エンジン（backend） ログ対応版
+    // ============================================================
+
+    // ★★★ logs を action + response に拡張（差分適用） ★★★
+    const state = {
+      phase: "IDLE",
+      delayMs: 0,
+      repairEnabled: true,
+      equipMode: "A",
+      targetHpName: "FREE",
+      lastStatus: {
+        hpNow: null,
+        hpMax: null,
+        stNow: null,
+        stMax: null,
+        spNow: null,
+        spMax: null,
+        hospitalized: false
+      },
+      stConfig: { threshold: 5, itemId: 1719 },
+      spConfig: { threshold: 100, itemId: 1721 },
+      enemyTeamId: null,
+      availableItems: [],
+
+      // ★★★ ここがログ機能最終差分の重要ポイント ★★★
+      logs: {
+        action: [],
+        response: []
+      },
+
+      session: null,
+      warEnded: false
+    };
+
+    // ★★★ log() をオブジェクト形式に変更（差分適用） ★★★
+    function log(msg) {
+      state.logs.action.push({
+        type: "action",
+        time: Date.now(),
+        message: msg
+      });
+    }
+
+    // UI / front からの設定反映
+    function applyConfigFromUI(cfg) {
+      if (!cfg || typeof cfg !== "object") return;
+      if ("repairEnabled" in cfg) state.repairEnabled = !!cfg.repairEnabled;
+      if ("equipMode" in cfg && ["A", "B", "N"].includes(cfg.equipMode)) {
+        state.equipMode = cfg.equipMode;
+      }
+      if ("delayMs" in cfg) state.delayMs = Number(cfg.delayMs) || 0;
+      if ("targetHpName" in cfg) state.targetHpName = cfg.targetHpName || "FREE";
+      if ("enemyTeamId" in cfg) state.enemyTeamId = cfg.enemyTeamId || null;
+      if (cfg.stConfig) Object.assign(state.stConfig, cfg.stConfig);
+      if (cfg.spConfig) Object.assign(state.spConfig, cfg.spConfig);
+
+      log(`CONFIG UPDATED: ${JSON.stringify(cfg)}`);
+    }
+
+    // front → backend
+    window.addEventListener("message", e => {
+      const data = e.data;
+      if (!data || typeof data !== "object") return;
+      const { from, cmd, payload } = data;
+
+      if (from === "tora-front" && cmd === "backend-start") {
+        const { enemyTeamName, startAt } = payload || {};
+        startSession(enemyTeamName, startAt);
+      }
+
+      if (from === "tora-front" && cmd === "backend-config") {
+        applyConfigFromUI(payload || {});
+      }
+    });
+
+    function startSession(enemyTeamName, startAt) {
+      const ts = startAt || Date.now();
+      state.session = {
+        sessionId: formatSessionId(ts),
+        enemyTeamName: sanitizeForSession(enemyTeamName || ""),
+        startAt: ts,
+        endAt: null,
+        result: null
+      };
+      state.warEnded = false;
+      log("SESSION: 抗争開始（裏エンジン監視開始）");
+    }
+
+    function sanitizeForSession(name) {
+      return (name || "")
+        .replace(/[^\u0000-\u007F々一-龠ぁ-んァ-ン０-９０-9Ａ-Ｚａ-ｚ]/g, "")
+        .slice(0, 20);
+    }
+
+    function formatSessionId(ts) {
+      const d = new Date(ts);
+      const pad = n => String(n).padStart(2, "0");
+      return (
+        `${d.getFullYear()}${pad(d.getMonth() + 1)}${pad(d.getDate())}-` +
+        `${pad(d.getHours())}${pad(d.getMinutes())}${pad(d.getSeconds())}`
+      );
+    }
+
+    function ensureHealIframe() {
+      let ifr = document.getElementById("tora_heal_iframe");
+      if (!ifr) {
+        ifr = document.createElement("iframe");
+        ifr.id = "tora_heal_iframe";
+        Object.assign(ifr.style, {
+          position: "fixed",
+          width: "0",
+          height: "0",
+          border: "0",
+          left: "-9999px",
+          top: "-9999px"
+        });
+        document.body.appendChild(ifr);
+      }
+      return ifr;
+    }
+
+    function disposeHealIframe() {
+      const ifr = document.getElementById("tora_heal_iframe");
+      if (ifr && ifr.parentNode) ifr.parentNode.removeChild(ifr);
+    }
+
+    // ============================================================
+    //  fetch フック（ログ対応版）
+    // ============================================================
+    (function hookFetch() {
+      if (window.__toraFetchHooked) return;
+      window.__toraFetchHooked = true;
+
+      const originalFetch = window.fetch.bind(window);
+
+      // ★★★ レスポンス分類（差分適用） ★★★
+      function classifyResponse(url) {
+        if (url.includes("/war/battle?other/")) return "attack";
+        if (url.includes("/use-item-exec")) return "heal";
+        if (url.includes("/item/repair-confirm") || url.includes("/item/repair-done"))
+          return "repair";
+        return null;
+      }
+
+      window.fetch = async function(input, init) {
+        const url =
+          typeof input === "string"
+            ? input
+            : input && input.url
+              ? input.url
+              : "";
+
+        // 攻撃ディレイ
+        if (url.includes("/war/battle?other/")) {
+          if (state.phase !== "IDLE") {
+            log("BLOCK: Attack during HEAL/REPAIR phase.");
+            return new Response(null, {
+              status: 403,
+              statusText: "War backend busy"
+            });
+          }
+          if (state.delayMs > 0) {
+            await new Promise(r => setTimeout(r, state.delayMs));
+            log(`DELAY: Attack delayed ${state.delayMs}ms`);
+          }
+        }
+
+        const res = await originalFetch(input, init);
+        const ct = res.headers.get("content-type") || "";
+        if (!ct.includes("text/html")) return res;
+
+        const clone = res.clone();
+
+        // ★★★ レスポンスログ追加（差分適用） ★★★
+        clone.text().then(html => {
+          try {
+            const kind = classifyResponse(url);
+            if (kind) {
+              state.logs.response.push({
+                type: "response",
+                time: Date.now(),
+                kind,
+                url,
+                status: res.status,
+                size: html.length
+              });
+            }
+
+            analyzeHtmlAndUpdateState(html);
+            detectWarEnd(html);
+          } catch (_) {}
+        });
+
+        return res;
+      };
+    })();
+
+// ============================================================
+    //  HTML解析 → 状態更新
+    // ============================================================
+    function analyzeHtmlAndUpdateState(html) {
+      const hospitalized = html.includes("<blink>入院中</blink>");
+
+      let hpNow = null,
+        hpMax = null;
+      const hpMatch1 = html.match(/HP[:：](\d+)\/(\d+)/);
+      if (hpMatch1) {
+        hpNow = parseInt(hpMatch1[1], 10);
+        hpMax = parseInt(hpMatch1[2], 10);
+      } else {
+        const hpMatch2 = html.match(
+          /icon_hp\.png[\s\S]*?(\d+)\/(\d+)\s*<\/div>/
+        );
+        if (hpMatch2) {
+          hpNow = parseInt(hpMatch2[1], 10);
+          hpMax = parseInt(hpMatch2[2], 10);
+        }
+      }
+
+      let stNow = null,
+        stMax = null;
+      const stMatch = html.match(/体力[\s\S]*?(\d+)\/(\d+)/);
+      if (stMatch) {
+        stNow = parseInt(stMatch[1], 10);
+        stMax = parseInt(stMatch[2], 10);
+      }
+
+      let spNow = null,
+        spMax = null;
+      const spMatch = html.match(/気合[\s\S]*?(\d+)\/(\d+)/);
+      if (spMatch) {
+        spNow = parseInt(spMatch[1], 10);
+        spMax = parseInt(spMatch[2], 10);
+      }
+
+      state.lastStatus = {
+        hpNow,
+        hpMax,
+        stNow,
+        stMax,
+        spNow,
+        spMax,
+        hospitalized
+      };
+
+      handleStSpAutoRecovery();
+
+      if (hospitalized && state.phase === "IDLE") {
+        log("HOSPITALIZED: Start repair/heal sequence.");
+        if (state.repairEnabled) runRepairSequence();
+        else runHealSequence();
+      }
+    }
+
+    // ============================================================
+    //  ST/SP 自動回復
+    // ============================================================
+    function handleStSpAutoRecovery() {
+      const { stNow, spNow } = state.lastStatus;
+
+      if (
+        typeof stNow === "number" &&
+        stNow <= state.stConfig.threshold &&
+        state.stConfig.itemId
+      ) {
+        const url = `/use-item-exec?item_id=${encodeURIComponent(
+          state.stConfig.itemId
+        )}`;
+        fetch(url, { method: "GET", credentials: "include" })
+          .then(() =>
+            log(`ST HEAL: item=${state.stConfig.itemId}, ST=${stNow}`)
+          )
+          .catch(() => log("ST HEAL: request failed"));
+      }
+
+      if (
+        typeof spNow === "number" &&
+        spNow <= state.spConfig.threshold &&
+        state.spConfig.itemId
+      ) {
+        const url = `/use-item-exec?item_id=${encodeURIComponent(
+          state.spConfig.itemId
+        )}`;
+        fetch(url, { method: "GET", credentials: "include" })
+          .then(() =>
+            log(`SP HEAL: item=${state.spConfig.itemId}, SP=${spNow}`)
+          )
+          .catch(() => log("SP HEAL: request failed"));
+      }
+    }
+
+    // ============================================================
+    //  修理シーケンス
+    // ============================================================
+    function runRepairSequence() {
+      state.phase = "REPAIR";
+      const ifr = ensureHealIframe();
+      ifr.src = "https://tantora.jp/item/repair-confirm";
+
+      const timer = setInterval(() => {
+        if (!ifr.contentWindow) return;
+
+        let url;
+        try {
+          url = ifr.contentWindow.location.href;
+        } catch (_) {
+          return;
+        }
+        if (!url) return;
+
+        if (url.includes("/item/repair-confirm")) {
+          const d = ifr.contentDocument;
+          if (!d) return;
+          const repairBtn =
+            d.querySelector('input[type="submit"][value*="修理"]') ||
+            d.querySelector('button[type="submit"]') ||
+            d.querySelector('a[href*="repair-done"]') ||
+            d.querySelector('input[type="submit"]') ||
+            d.querySelector("button[type=submit]");
+          if (!repairBtn) return;
+
+          repairBtn.click();
+          log("REPAIR: start repairing.");
+          clearInterval(timer);
+
+          const timer2 = setInterval(() => {
+            let url2;
+            try {
+              url2 = ifr.contentWindow.location.href;
+            } catch (_) {
+              return;
+            }
+            if (!url2) return;
+
+            if (url2.includes("/item/repair-done")) {
+              log("REPAIR: done.");
+              clearInterval(timer2);
+              disposeHealIframe();
+              runHealSequence();
+            }
+          }, 200);
+          return;
+        }
+
+        if (!url.includes("/item/repair-confirm")) {
+          log("REPAIR: not required / error, skip.");
+          clearInterval(timer);
+          disposeHealIframe();
+          runHealSequence();
+        }
+      }, 200);
+    }
+
+    // ============================================================
+    //  回復シーケンス
+    // ============================================================
+    function runHealSequence() {
+      state.phase = "HEAL";
+      const ifr = ensureHealIframe();
+      const url = state.enemyTeamId
+        ? `https://tantora.jp/war/member-list/${encodeURIComponent(
+            state.enemyTeamId
+          )}`
+        : "https://tantora.jp/war/member-list";
+      ifr.src = url;
+
+      const timer = setInterval(() => {
+        const d = ifr.contentDocument;
+        if (!d) return;
+        if (!d.URL.includes("/war/member-list")) return;
+
+        let popup = d.querySelector(".popupWindowContents");
+        if (!popup) {
+          const healBtn =
+            d.querySelector('img[src*="footer_heal"]')?.parentElement || null;
+          if (healBtn) healBtn.click();
+          return;
+        }
+
+        popup = d.querySelector(".popupWindowContents");
+        if (!popup) return;
+
+        const radios = popup.querySelectorAll(
+          'input[name="select_preset_radio"]'
+        );
+        const idx = { A: 0, B: 1, N: 2 }[state.equipMode] ?? 0;
+        if (radios[idx] && !radios[idx].checked) radios[idx].click();
+
+        const items = Array.from(
+          popup.querySelectorAll("li.itemHP")
+        ).map(li => {
+          const ps = li.querySelectorAll("p");
+          const name = ps[0]?.innerText || "";
+          const remainText = ps[2]?.innerText || "";
+          const remaining = parseInt(
+            (remainText.match(/残り(\d+)回/) || [])[1] || "0",
+            10
+          );
+          const isFull = name.includes("全回復");
+          return { name, remaining, isFull, element: li };
+        });
+        state.availableItems = items;
+
+        // front に転送
+        window.parent.postMessage(
+          {
+            from: "tora-backend",
+            cmd: "backend-state",
+            payload: { availableItems: items }
+          },
+          "*"
+        );
+
+        let target = null;
+        if (state.targetHpName === "FREE") {
+          target =
+            items.find(i => i.isFull && i.remaining > 0) ||
+            items.find(i => !i.isFull && i.remaining > 0);
+        } else {
+          target = items.find(
+            i => i.name.includes(state.targetHpName) && i.remaining > 0
+          );
+        }
+
+        if (!target) {
+          clearInterval(timer);
+          disposeHealIframe();
+          state.phase = "IDLE";
+          log("HEAL: no HP items, give up.");
+          return;
+        }
+
+        target.element.click();
+        clearInterval(timer);
+
+        const timer2 = setInterval(() => {
+          const d2 = ifr.contentDocument;
+          if (!d2) return;
+
+          const useBtn =
+            d2.querySelector("a.multi-form-submit") ||
+            d2.querySelector('input[type="submit"]');
+          if (!useBtn) return;
+
+          useBtn.click();
+          clearInterval(timer2);
+
+          if (target.isFull) {
+            log(`HEAL: full HP item used (${target.name}).`);
+            disposeHealIframe();
+            state.phase = "IDLE";
+            return;
+          }
+
+          setTimeout(() => {
+            const d3 = ifr.contentDocument;
+            const stillHospital =
+              d3 && d3.body && d3.body.innerHTML.includes("入院中");
+            if (stillHospital) {
+              log(
+                `HEAL: still hospitalized after normal item (${target.name}), retry.`
+              );
+              runHealSequence();
+            } else {
+              log(
+                `HEAL: HP recovered by normal item (${target.name}).`
+              );
+              disposeHealIframe();
+              state.phase = "IDLE";
+            }
+          }, 300);
+        }, 80);
+      }, 150);
+    }
+
+// ============================================================
+    //  抗争終了検知（timeline 統合版）
+    // ============================================================
+    function detectWarEnd(html) {
+      if (state.warEnded || !state.session) return;
+      if (!html.includes("抗争終了")) return;
+
+      state.warEnded = true;
+      state.session.endAt = Date.now();
+      state.session.result = detectResult(html);
+
+      log(`SESSION: 抗争終了 → 結果: ${state.session.result}`);
+
+      // ★★★ timeline 統合（action + response） ★★★
+      const timeline = [
+        ...state.logs.action.map(a => ({
+          type: "action",
+          time: a.time,
+          message: a.message
+        })),
+        ...state.logs.response.map(r => ({
+          type: "response",
+          time: r.time,
+          kind: r.kind,
+          url: r.url,
+          status: r.status,
+          size: r.size
+        }))
+      ].sort((a, b) => a.time - b.time);
+
+      // ★★★ front へ送信（backend-session に統一） ★★★
+      try {
+        window.parent.postMessage(
+          {
+            from: "tora-backend",
+            cmd: "backend-session",
+            payload: {
+              session: state.session,
+              logs: { timeline }
+            }
+          },
+          "*"
+        );
+      } catch (_) {
+        // 送信失敗は無視
+      }
+
+      // ★★★ ログリセット ★★★
+      state.session = null;
+      state.logs.action = [];
+      state.logs.response = [];
+    }
+
+    function detectResult(html) {
+      if (html.includes("勝利")) return "WIN";
+      if (html.includes("敗北")) return "LOSE";
+      return "DRAW";
+    }
+
+    // デバッグ用
+    window.__toraBackendState = state;
+
+    log("Tora backend engine (guard+heal+session+timeline) initialized.");
+  })();
+})();
