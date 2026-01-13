@@ -526,7 +526,7 @@ function refreshWarInfo(warInfo, header, saved) {
       }
 
       if (cmd === "ui-open-log-viewer") {
-        window.open("https://tantora.jp/my", "_blank");
+        window.open("https://tantora.jp/my?logviewer=1", "_blank");
       }
     });
 
