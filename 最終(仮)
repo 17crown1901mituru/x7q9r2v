@@ -61,13 +61,10 @@
     equipMode: "N",
     delayMs: 0,
     hpItems: [],
-    hpIndex: 0,              // 0 = Free
+    hpIndex: 0,
     autoSelectedItem: null
   };
 
-  // ---------------------------
-  // CSS（80px幅 + 13pxフォント最適化）
-  // ---------------------------
   function injectUICSS() {
     const css = `
 #tora-ui {
@@ -112,6 +109,10 @@
     style.textContent = css;
     document.head.appendChild(style);
   }
+
+  injectUICSS();
+
+})();
 
   // ---------------------------
   // UI 生成
