@@ -559,40 +559,6 @@ function refreshWarInfo(warInfo, header, saved) {
   })();
 
   // ============================================================
-  //  裏エンジン（backend）
-  // ============================================================
-  (function initBackend() {
-    if (window.__toraBackendEngineLoaded) return;
-    window.__toraBackendEngineLoaded = true;
-
-    const state = {
-      phase: "IDLE",
-      delayMs: 0,
-      repairEnabled: true,
-      equipMode: "A",
-      targetHpName: "FREE",
-      lastStatus: {
-        hpNow: null,
-        hpMax: null,
-        stNow: null,
-        stMax: null,
-        spNow: null,
-        spMax: null,
-        hospitalized: false
-      },
-      stConfig: { threshold: 5, itemId: 1719 },
-      spConfig: { threshold: 100, itemId: 1721 },
-      enemyTeamId: null,
-      availableItems: [],
-
-      // ★★★ Part5 で logs.action → logs.action + logs.response に拡張する ★★★
-      logs: { action: [] },
-
-      session: null,
-      warEnded: false
-    };
-
-// ============================================================
     //  裏エンジン（backend） ログ対応版
     // ============================================================
 
