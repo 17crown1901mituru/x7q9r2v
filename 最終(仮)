@@ -413,6 +413,9 @@
     bindButtons(root);
     bindUIIncoming();
 
+    root.classList.add("expanded");
+    root.classList.remove("collapsed");
+
     updateRepairButton();
     updateModeButton();
     updateDelayButton();
