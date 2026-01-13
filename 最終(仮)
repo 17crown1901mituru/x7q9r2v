@@ -9,25 +9,26 @@
 // @grant        none
 // ==/UserScript==
 
+(`javascript
 (function() {
   "use strict";
 
   // ============================================================
   //  共通：簡易ログユーティリティ（front 用）
   // ============================================================
-  const LOG_KEY = "sneakyjs_front_log";
+  const LOGKEY = "sneakyjsfront_log";
 
   function nowStamp() {
     const d = new Date();
     const pad = n => String(n).padStart(2, "0");
     return (
-      `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())} ` +
-      `${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}`
+      ${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}  +
+      ${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}
     );
   }
 
   function logLine(msg) {
-    return `[${nowStamp()}] ${msg}`;
+    return [${nowStamp()}] ${msg};
   }
 
   function sanitizeName(name) {
@@ -43,19 +44,13 @@
         logs.push(line);
         localStorage.setItem(LOG_KEY, JSON.stringify(logs));
       }
-    } catch (_) {
-      // ログ失敗は無視
-    }
+    } catch (_) {}
   }
 
   // ============================================================
-//  UI 層（リモコン） 80px リサイズ版
-// ============================================================
-(function initUI() {
-  if (window.__toraUIInitialized) return;
-  window.__toraUIInitialized = true;
-
-  const state = {
+  //  UI 全体で共有する state（★ここが重要★）
+  // ============================================================
+  const uiState = {
     collapsed: true,
     repairEnabled: false,
     equipMode: "N",
@@ -65,9 +60,17 @@
     autoSelectedItem: null
   };
 
-  function injectUICSS() {
-    const css = `
-#tora-ui {
+  // ============================================================
+  //  UI 層（リモコン）
+  // ============================================================
+  (function initUI() {
+    if (window.toraUIInitialized) return;
+    window.toraUIInitialized = true;
+
+    function injectUICSS() {
+      const css = `
+
+tora-ui {
   position: fixed;
   top: 10px;
   right: 10px;
@@ -75,7 +78,8 @@
   font-size: 13px;
   user-select: none;
 }
-#tora-ui.collapsed .tora-btn:not(#btnLog) {
+
+tora-ui.collapsed .tora-btn:not(#btnLog) {
   display: none;
 }
 .tora-btn {
@@ -101,18 +105,18 @@
   color: #0f0;
   font-size: 13px;
 }
-#btnLog {
+
+btnLog {
   background: #09f;
 }
-    `;
-    const style = document.createElement("style");
-    style.textContent = css;
-    document.head.appendChild(style);
-  }
+      `;
+      const style = document.createElement("style");
+      style.textContent = css;
+      document.head.appendChild(style);
+    }
 
-  injectUICSS();
-
-})();
+    injectUICSS();
+  })();
 
   // ---------------------------
   // UI 生成
