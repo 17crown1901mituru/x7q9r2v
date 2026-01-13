@@ -634,10 +634,14 @@ function refreshWarInfo(warInfo, header, saved) {
       if (from !== "tora-backend") return;
 
       if (cmd === "backend-state") {
-        if (payload.availableItems) {
-          sendToUI("ui-update-items", payload.availableItems);
-        }
-      }
+  // backend は { availableItems: [...], autoSelectedItem: {...} } を返す
+  if (payload.availableItems) {
+    sendToUI("ui-update-items", {
+      items: payload.availableItems,
+      autoSelectedItem: payload.autoSelectedItem || null
+    });
+  }
+}
 
       // ★★★ この backend-session-complete は Part4 で backend-session に変更される ★★★
       if (cmd === "backend-session-complete") {
