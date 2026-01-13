@@ -49,280 +49,378 @@
   }
 
   // ============================================================
-  //  UI 層（リモコン）
-  //  - tantora.jp 全域で表示
-  //  - UI → front: postMessage(from=tora-ui)
-  //  - front → UI: postMessage(from=tora-front)
-  // ============================================================
-  (function initUI() {
-    if (window.__toraUIInitialized) return;
-    window.__toraUIInitialized = true;
+//  UI 層（リモコン） 80px リサイズ版
+// ============================================================
+(function initUI() {
+  if (window.__toraUIInitialized) return;
+  window.__toraUIInitialized = true;
 
-    const state = {
-      collapsed: true,
-      repairEnabled: false,
-      equipMode: "N",
-      delayMs: 0,
-      availableItems: [],
-      hpIndex: 0
-    };
+  const state = {
+    collapsed: true,
+    repairEnabled: false,
+    equipMode: "N",
+    delayMs: 0,
+    hpItems: [],
+    hpIndex: 0,              // 0 = Free
+    autoSelectedItem: null
+  };
 
-    function injectUICSS() {
-      const css = `
+  // ---------------------------
+  // CSS（80px幅 + 13pxフォント最適化）
+  // ---------------------------
+  function injectUICSS() {
+    const css = `
 #tora-ui {
   position: fixed;
   top: 10px;
   right: 10px;
   z-index: 999999;
-  font-size: 14px;
+  font-size: 13px;
   user-select: none;
 }
 #tora-ui.collapsed .tora-btn:not(#btnLog) {
   display: none;
 }
 .tora-btn {
-  width: 120px;
+  width: 80px;
   height: 40px;
   margin-bottom: 6px;
   background: #333;
   color: #fff;
   border-radius: 6px;
   text-align: center;
-  line-height: 20px;
+  line-height: 18px;
   padding-top: 4px;
   box-sizing: border-box;
+  font-size: 13px;
 }
-.hp-item {
+.tora-btn.hp-item {
   height: 60px;
-  background: #666;
+  line-height: 16px;
+  font-size: 13px;
 }
-.hp-count {
+.tora-btn.hp-count {
   background: rgba(0,0,0,0.95);
   color: #0f0;
+  font-size: 13px;
 }
 #btnLog {
   background: #09f;
 }
-      `;
-      const style = document.createElement("style");
-      style.textContent = css;
-      document.head.appendChild(style);
-    }
+    `;
+    const style = document.createElement("style");
+    style.textContent = css;
+    document.head.appendChild(style);
+  }
 
-    function createUI() {
-      if (document.getElementById("tora-ui")) return null;
+  // ---------------------------
+  // UI 生成
+  // ---------------------------
+  function createUI() {
+    if (document.getElementById("tora-ui")) return null;
 
-      const root = document.createElement("div");
-      root.id = "tora-ui";
-      root.className = "collapsed";
+    const root = document.createElement("div");
+    root.id = "tora-ui";
+    root.className = "collapsed";
 
-      root.innerHTML = `
-        <div class="tora-btn" id="btnRepair">Repair<br>OFF</div>
+    root.innerHTML = `
+      <div class="tora-btn" id="btnRepair">Repair<br>OFF</div>
 
-        <div class="tora-btn" id="btnModeA" data-mode="A">A</div>
-        <div class="tora-btn" id="btnModeB" data-mode="B">B</div>
-        <div class="tora-btn" id="btnModeN" data-mode="N">N</div>
+      <div class="tora-btn" id="btnMode">Mode: N</div>
 
-        <div class="tora-btn" id="btnDelay0" data-delay="0">Delay OFF</div>
-        <div class="tora-btn" id="btnDelay500" data-delay="500">D:500</div>
-        <div class="tora-btn" id="btnDelay1000" data-delay="1000">D:1000</div>
-        <div class="tora-btn" id="btnDelay1500" data-delay="1500">D:1500</div>
-        <div class="tora-btn" id="btnDelay2000" data-delay="2000">D:2000</div>
+      <div class="tora-btn" id="btnDelay">Delay OFF</div>
 
-        <div class="tora-btn hp-item" id="btnHpItem">---</div>
-        <div class="tora-btn hp-count" id="hpCount">-- / --</div>
+      <div class="tora-btn hp-item" id="btnHpItem">Free</div>
+      <div class="tora-btn hp-count" id="hpCount">-- / --</div>
 
-        <div class="tora-btn" id="btnLog">LOG</div>
-      `;
+      <div class="tora-btn" id="btnLog">LOG</div>
+    `;
 
-      document.body.appendChild(root);
-      return root;
-    }
+    document.body.appendChild(root);
+    return root;
+  }
 
-    function sendToFront(cmd, payload = {}) {
-      window.postMessage({ from: "tora-ui", cmd, payload }, "*");
-    }
+  function sendToFront(cmd, payload = {}) {
+    window.postMessage({ from: "tora-ui", cmd, payload }, "*");
+  }
 
-    function formatItemName(name) {
-      const trimmed =
-        name.length > 10 ? name.slice(0, 10) + "…" : name;
-      const line1 = trimmed.slice(0, 5);
-      const line2 = trimmed.slice(5);
-      return { line1, line2 };
-    }
+  // ---------------------------
+  // HPアイテム表示更新
+  // ---------------------------
+  function updateHpItemDisplay() {
+    const btn = document.getElementById("btnHpItem");
+    const count = document.getElementById("hpCount");
+    if (!btn || !count) return;
 
-    function updateHpItemDisplay(item) {
-      const btn = document.getElementById("btnHpItem");
-      const count = document.getElementById("hpCount");
-      if (!btn || !count) return;
+    // Free
+    if (state.hpIndex === 0) {
+      btn.style.background = "rgba(0,0,0,0.95)";
+      btn.style.color = "#c0f";
+      btn.innerHTML = "Free";
 
-      if (!item) {
-        btn.innerHTML = "---";
+      if (state.autoSelectedItem) {
+        const r = state.autoSelectedItem.remaining ?? "--";
+        count.textContent = `${r} / ${r}`;
+      } else {
         count.textContent = "-- / --";
-        return;
       }
-      const { line1, line2 } = formatItemName(item.name || "");
-      btn.innerHTML = `${line1}<br>${line2}`;
-      count.textContent = `${item.remaining ?? "--"} / ${item.remaining ?? "--"}`;
+      return;
     }
 
-    function enableDrag(root) {
-      let dragging = false;
-      let sx = 0, sy = 0, ox = 0, oy = 0;
+    // アイテム選択時
+    const item = state.hpItems[state.hpIndex - 1];
+    if (!item) {
+      btn.innerHTML = "---";
+      count.textContent = "-- / --";
+      return;
+    }
 
-      root.addEventListener("touchstart", e => {
-        if (!state.collapsed) return;
-        dragging = true;
-        const t = e.touches[0];
-        sx = t.clientX;
-        sy = t.clientY;
-        const rect = root.getBoundingClientRect();
-        ox = rect.left;
-        oy = rect.top;
-      });
+    let name = item.name || "";
+    if (name.length > 10) name = name.slice(0, 10) + "…";
 
-      root.addEventListener("touchmove", e => {
+    const line1 = name.slice(0, 5);
+    const line2 = name.slice(5);
+
+    btn.style.background = "rgba(0,0,0,0.95)";
+    btn.style.color = "#c0f";
+    btn.innerHTML = `${line1}<br>${line2}`;
+
+    const r = item.remaining ?? "--";
+    count.textContent = `${r} / ${r}`;
+  }
+
+  // ---------------------------
+  // Repair ボタン
+  // ---------------------------
+  function updateRepairButton() {
+    const btn = document.getElementById("btnRepair");
+    if (!btn) return;
+    if (state.repairEnabled) {
+      btn.innerHTML = "Repair<br>ON";
+      btn.style.background = "#5bc0de";
+      btn.style.color = "#000";
+    } else {
+      btn.innerHTML = "Repair<br>OFF";
+      btn.style.background = "#666";
+      btn.style.color = "#fff";
+    }
+  }
+
+  // ---------------------------
+  // Mode トグル
+  // ---------------------------
+  function updateModeButton() {
+    const btn = document.getElementById("btnMode");
+    if (!btn) return;
+
+    btn.textContent = `Mode: ${state.equipMode}`;
+
+    if (state.equipMode === "A") {
+      btn.style.background = "#ff0";
+      btn.style.color = "#000";
+    } else if (state.equipMode === "B") {
+      btn.style.background = "#f00";
+      btn.style.color = "#fff";
+    } else {
+      btn.style.background = "#fff";
+      btn.style.color = "#000";
+    }
+  }
+
+  // ---------------------------
+  // Delay トグル
+  // ---------------------------
+  function updateDelayButton() {
+    const btn = document.getElementById("btnDelay");
+    if (!btn) return;
+
+    const d = state.delayMs;
+    let text = "";
+    let bg = "";
+    let color = "#000";
+
+    if (d === 0) {
+      text = "Delay OFF";
+      bg = "#ff0";
+    } else {
+      text = `D:${d}`;
+      if (d === 500) bg = "#0f0";
+      else if (d === 1000) bg = "#0ff";
+      else if (d === 1500) bg = "#fa0";
+      else if (d === 2000) {
+        bg = "#f00";
+        color = "#fff";
+      }
+    }
+
+    btn.textContent = text;
+    btn.style.background = bg;
+    btn.style.color = color;
+  }
+
+  // ---------------------------
+  // ドラッグ（collapsed時のみ）
+  // ---------------------------
+  function enableDrag(root) {
+    let dragging = false;
+    let sx = 0, sy = 0, ox = 0, oy = 0;
+
+    root.addEventListener("touchstart", e => {
+      if (!state.collapsed) return;
+      dragging = true;
+      const t = e.touches[0];
+      sx = t.clientX;
+      sy = t.clientY;
+      const rect = root.getBoundingClientRect();
+      ox = rect.left;
+      oy = rect.top;
+    });
+
+    root.addEventListener(
+      "touchmove",
+      e => {
         if (!dragging || !state.collapsed) return;
+        e.preventDefault();
         const t = e.touches[0];
         root.style.left = `${ox + (t.clientX - sx)}px`;
         root.style.top = `${oy + (t.clientY - sy)}px`;
         root.style.right = "";
-      });
+      },
+      { passive: false }
+    );
 
-      root.addEventListener("touchend", () => {
-        dragging = false;
-      });
+    root.addEventListener("touchend", () => {
+      dragging = false;
+    });
+  }
+
+  // ---------------------------
+  // LOG ボタン
+  // ---------------------------
+  function bindLogButton(root) {
+    const btn = document.getElementById("btnLog");
+    let timer = null;
+    let longPressed = false;
+    const longPress = 600;
+
+    btn.addEventListener("touchstart", () => {
+      longPressed = false;
+      timer = setTimeout(() => {
+        longPressed = true;
+        if (!state.collapsed) {
+          window.postMessage(
+            { from: "tora-ui", cmd: "ui-open-log-viewer" },
+            "*"
+          );
+        }
+      }, longPress);
+    });
+
+    btn.addEventListener("touchend", () => {
+      if (timer) clearTimeout(timer);
+      if (!longPressed) toggleUI(root);
+    });
+  }
+
+  // ---------------------------
+  // UI 折りたたみ
+  // ---------------------------
+  function toggleUI(root) {
+    state.collapsed = !state.collapsed;
+    if (state.collapsed) {
+      root.classList.add("collapsed");
+      root.classList.remove("expanded");
+    } else {
+      root.classList.add("expanded");
+      root.classList.remove("collapsed");
+      root.style.top = "10px";
+      root.style.right = "10px";
+      root.style.left = "";
     }
+  }
 
-function toggleUI(root) {
-      state.collapsed = !state.collapsed;
-      if (state.collapsed) {
-        root.classList.add("collapsed");
-        root.classList.remove("expanded");
+  // ---------------------------
+  // ボタンバインド
+  // ---------------------------
+  function bindButtons(root) {
+    // Repair
+    document.getElementById("btnRepair").addEventListener("click", () => {
+      state.repairEnabled = !state.repairEnabled;
+      updateRepairButton();
+      sendToFront("ui-config", { repairEnabled: state.repairEnabled });
+    });
+
+    // Mode
+    document.getElementById("btnMode").addEventListener("click", () => {
+      const order = ["A", "B", "N"];
+      const idx = order.indexOf(state.equipMode);
+      state.equipMode = order[(idx + 1) % order.length];
+      updateModeButton();
+      sendToFront("ui-config", { equipMode: state.equipMode });
+    });
+
+    // Delay
+    document.getElementById("btnDelay").addEventListener("click", () => {
+      const order = [0, 500, 1000, 1500, 2000];
+      const idx = order.indexOf(state.delayMs);
+      state.delayMs = order[(idx + 1) % order.length];
+      updateDelayButton();
+      sendToFront("ui-config", { delayMs: state.delayMs });
+    });
+
+    // HPアイテム
+    document.getElementById("btnHpItem").addEventListener("click", () => {
+      const total = state.hpItems.length + 1;
+      state.hpIndex = (state.hpIndex + 1) % total;
+
+      if (state.hpIndex === 0) {
+        sendToFront("ui-config", { targetHpName: null });
       } else {
-        root.classList.add("expanded");
-        root.classList.remove("collapsed");
-        root.style.top = "10px";
-        root.style.right = "10px";
-        root.style.left = "";
+        const item = state.hpItems[state.hpIndex - 1];
+        sendToFront("ui-config", { targetHpName: item.name });
       }
-    }
 
-    function bindLogButton(root) {
-      const btn = document.getElementById("btnLog");
-      let timer = null;
-      const longPress = 600;
+      updateHpItemDisplay();
+    });
+  }
 
-      btn.addEventListener("touchstart", () => {
-        timer = setTimeout(() => {
-          if (!state.collapsed) {
-            window.postMessage(
-              { from: "tora-ui", cmd: "ui-open-log-viewer" },
-              "*"
-            );
-          }
-        }, longPress);
-      });
+  // ---------------------------
+  // front → UI
+  // ---------------------------
+  function bindUIIncoming() {
+    window.addEventListener("message", e => {
+      const { from, cmd, payload } = e.data || {};
+      if (from !== "tora-front") return;
 
-      btn.addEventListener("touchend", () => {
-        if (timer) {
-          clearTimeout(timer);
-          toggleUI(root);
-        }
-      });
-    }
+      if (cmd === "ui-update-items") {
+        state.hpItems = payload.items || [];
+        state.autoSelectedItem = payload.autoSelectedItem || null;
+        updateHpItemDisplay();
+      }
+    });
+  }
 
-    function bindButtons(root) {
-      const btnRepair = document.getElementById("btnRepair");
-      btnRepair.addEventListener("click", () => {
-        state.repairEnabled = !state.repairEnabled;
-        btnRepair.innerHTML = state.repairEnabled
-          ? "Repair<br>ON"
-          : "Repair<br>OFF";
-        window.postMessage(
-          {
-            from: "tora-ui",
-            cmd: "ui-config",
-            payload: { repairEnabled: state.repairEnabled }
-          },
-          "*"
-        );
-      });
+  // ---------------------------
+  // 初期化
+  // ---------------------------
+  function init() {
+    injectUICSS();
+    const root = createUI();
+    if (!root) return;
 
-      ["A", "B", "N"].forEach(m => {
-        const btn = document.getElementById("btnMode" + m);
-        btn.addEventListener("click", () => {
-          state.equipMode = m;
-          window.postMessage(
-            {
-              from: "tora-ui",
-              cmd: "ui-config",
-              payload: { equipMode: m }
-            },
-            "*"
-          );
-        });
-      });
+    enableDrag(root);
+    bindLogButton(root);
+    bindButtons(root);
+    bindUIIncoming();
 
-      [0, 500, 1000, 1500, 2000].forEach(d => {
-        const id = d === 0 ? "btnDelay0" : "btnDelay" + d;
-        const btn = document.getElementById(id);
-        btn.addEventListener("click", () => {
-          state.delayMs = d;
-          window.postMessage(
-            {
-              from: "tora-ui",
-              cmd: "ui-config",
-              payload: { delayMs: d }
-            },
-            "*"
-          );
-        });
-      });
+    updateRepairButton();
+    updateModeButton();
+    updateDelayButton();
+    updateHpItemDisplay();
+  }
 
-      const btnHp = document.getElementById("btnHpItem");
-      btnHp.addEventListener("click", () => {
-        if (!state.availableItems.length) return;
-        state.hpIndex =
-          (state.hpIndex + 1) % state.availableItems.length;
-        const item = state.availableItems[state.hpIndex];
-        updateHpItemDisplay(item);
-        window.postMessage(
-          {
-            from: "tora-ui",
-            cmd: "ui-config",
-            payload: { targetHpName: item.name }
-          },
-          "*"
-        );
-      });
-    }
-
-    function bindUIIncoming() {
-      window.addEventListener("message", e => {
-        const { from, cmd, payload } = e.data || {};
-        if (from !== "tora-front") return;
-
-        if (cmd === "ui-update-items") {
-          state.availableItems = payload || [];
-          state.hpIndex = 0;
-          updateHpItemDisplay(state.availableItems[0]);
-        }
-      });
-    }
-
-    function init() {
-      injectUICSS();
-      const root = createUI();
-      if (!root) return;
-      enableDrag(root);
-      bindLogButton(root);
-      bindButtons(root);
-      bindUIIncoming();
-    }
-
-    init();
-  })();
+  init();
+})();
 
   // ============================================================
   //  表エンジン（front）
