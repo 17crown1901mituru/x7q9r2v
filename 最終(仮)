@@ -694,14 +694,28 @@ function refreshWarInfo(warInfo, header, saved) {
 
       const originalFetch = window.fetch.bind(window);
 
-      // ★★★ レスポンス分類（差分適用） ★★★
       function classifyResponse(url) {
-        if (url.includes("/war/battle?other/")) return "attack";
-        if (url.includes("/use-item-exec")) return "heal";
-        if (url.includes("/item/repair-confirm") || url.includes("/item/repair-done"))
-          return "repair";
-        return null;
-      }
+  // 攻撃
+  if (url.includes("/war/battle?other/")) {
+    return "attack";
+  }
+
+  // 回復アイテム使用
+  if (url.includes("/use-item-exec")) {
+    return "heal";
+  }
+
+  // 修理（確認・完了）
+  if (
+    url.includes("/item/repair-confirm") ||
+    url.includes("/item/repair-done")
+  ) {
+    return "repair";
+  }
+
+  // どれにも該当しない
+  return null;
+}
 
       window.fetch = async function(input, init) {
         const url =
