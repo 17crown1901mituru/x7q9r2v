@@ -1,11 +1,11 @@
 // ==UserScript==
-// @name         Tora Sync 三層完全統合版（ログ対応版）
+// @name         Tora Sync 三層完全統合版
 // @namespace    https://tantora.jp/
 // @version      1.1.0
 // @author       光琉✞みつる
 // @description  単虎 抗争用 UI＋表エンジン＋裏エンジンを統合し、修理・回復・ディレイ・ログ管理（timeline）を一括制御するスクリプト
 // @match        https://tantora.jp/*
-// @run-at       document-end
+// @run-at       document-start
 // @grant        none
 // ==/UserScript==
 
@@ -48,7 +48,7 @@
     }
   }
 
-  // ============================================================
+  //// ============================================================
 //  UI 層（リモコン） 80px リサイズ版
 // ============================================================
 (function initUI() {
@@ -656,7 +656,7 @@ function refreshWarInfo(warInfo, header, saved) {
     })();
   })();
 
-  // ============================================================
+// ============================================================
     //  裏エンジン（backend） ログ対応版
     // ============================================================
 
@@ -744,12 +744,15 @@ function refreshWarInfo(warInfo, header, saved) {
       state.warEnded = false;
       log("SESSION: 抗争開始（裏エンジン監視開始）");
     }
+function sanitizeForSession(name) {
 
-    function sanitizeForSession(name) {
-      return (name || "")
-        .replace(/[^\u0000-\u007F々一-龠ぁ-んァ-ン０-９０-9Ａ-Ｚａ-ｚ]/g, "")
-        .slice(0, 20);
-    }
+  return (name || "")
+
+    .replace(/[^\u0000-\u007F々一-龠ぁ-んァ-ン0-9０-９A-Za-zＡ-Ｚａ-ｚ]/g, "")
+
+    .slice(0, 20);
+
+}
 
     function formatSessionId(ts) {
       const d = new Date(ts);
@@ -1210,7 +1213,6 @@ function refreshWarInfo(warInfo, header, saved) {
 
     log("Tora backend engine (guard+heal+session+timeline) initialized.");
   })();
-})();
 
 // ============================================================
 //  ログビューア（timeline / front log）
