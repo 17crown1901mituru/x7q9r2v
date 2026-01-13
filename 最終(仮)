@@ -15,19 +15,19 @@
   // ============================================================
   //  共通：簡易ログユーティリティ（front 用）
   // ============================================================
-  const LOGKEY = "sneakyjsfront_log";
+  const LOG_KEY = "sneakyjs_front_log";
 
   function nowStamp() {
     const d = new Date();
     const pad = n => String(n).padStart(2, "0");
     return (
-      ${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}  +
-      ${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}
+      `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())} ` +
+      `${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}`
     );
   }
 
   function logLine(msg) {
-    return [${nowStamp()}] ${msg};
+    return `[${nowStamp()}] ${msg}`;
   }
 
   function sanitizeName(name) {
@@ -63,13 +63,12 @@
   //  UI 層（リモコン）
   // ============================================================
   (function initUI() {
-    if (window.toraUIInitialized) return;
-    window.toraUIInitialized = true;
+    if (window.__toraUIInitialized) return;
+    window.__toraUIInitialized = true;
 
     function injectUICSS() {
       const css = `
-
-tora-ui {
+#tora-ui {
   position: fixed;
   top: 10px;
   right: 10px;
@@ -77,8 +76,7 @@ tora-ui {
   font-size: 13px;
   user-select: none;
 }
-
-tora-ui.collapsed .tora-btn:not(#btnLog) {
+#tora-ui.collapsed .tora-btn:not(#btnLog) {
   display: none;
 }
 .tora-btn {
@@ -104,8 +102,7 @@ tora-ui.collapsed .tora-btn:not(#btnLog) {
   color: #0f0;
   font-size: 13px;
 }
-
-btnLog {
+#btnLog {
   background: #09f;
 }
       `;
@@ -129,14 +126,10 @@ btnLog {
 
     root.innerHTML = `
       <div class="tora-btn" id="btnRepair">Repair<br>OFF</div>
-
       <div class="tora-btn" id="btnMode">Mode: N</div>
-
       <div class="tora-btn" id="btnDelay">Delay OFF</div>
-
       <div class="tora-btn hp-item" id="btnHpItem">Free</div>
       <div class="tora-btn hp-count" id="hpCount">-- / --</div>
-
       <div class="tora-btn" id="btnLog">LOG</div>
     `;
 
@@ -156,14 +149,13 @@ btnLog {
     const count = document.getElementById("hpCount");
     if (!btn || !count) return;
 
-    // Free
-    if (state.hpIndex === 0) {
+    if (uiState.hpIndex === 0) {
       btn.style.background = "rgba(0,0,0,0.95)";
       btn.style.color = "#c0f";
       btn.innerHTML = "Free";
 
-      if (state.autoSelectedItem) {
-        const r = state.autoSelectedItem.remaining ?? "--";
+      if (uiState.autoSelectedItem) {
+        const r = uiState.autoSelectedItem.remaining ?? "--";
         count.textContent = `${r} / ${r}`;
       } else {
         count.textContent = "-- / --";
@@ -171,8 +163,7 @@ btnLog {
       return;
     }
 
-    // アイテム選択時
-    const item = state.hpItems[state.hpIndex - 1];
+    const item = uiState.hpItems[uiState.hpIndex - 1];
     if (!item) {
       btn.innerHTML = "---";
       count.textContent = "-- / --";
@@ -199,7 +190,7 @@ btnLog {
   function updateRepairButton() {
     const btn = document.getElementById("btnRepair");
     if (!btn) return;
-    if (state.repairEnabled) {
+    if (uiState.repairEnabled) {
       btn.innerHTML = "Repair<br>ON";
       btn.style.background = "#5bc0de";
       btn.style.color = "#000";
@@ -217,12 +208,12 @@ btnLog {
     const btn = document.getElementById("btnMode");
     if (!btn) return;
 
-    btn.textContent = `Mode: ${state.equipMode}`;
+    btn.textContent = `Mode: ${uiState.equipMode}`;
 
-    if (state.equipMode === "A") {
+    if (uiState.equipMode === "A") {
       btn.style.background = "#ff0";
       btn.style.color = "#000";
-    } else if (state.equipMode === "B") {
+    } else if (uiState.equipMode === "B") {
       btn.style.background = "#f00";
       btn.style.color = "#fff";
     } else {
@@ -238,7 +229,7 @@ btnLog {
     const btn = document.getElementById("btnDelay");
     if (!btn) return;
 
-    const d = state.delayMs;
+    const d = uiState.delayMs;
     let text = "";
     let bg = "";
     let color = "#000";
@@ -263,14 +254,14 @@ btnLog {
   }
 
   // ---------------------------
-  // ドラッグ（collapsed時のみ）
+  // ドラッグ
   // ---------------------------
   function enableDrag(root) {
     let dragging = false;
     let sx = 0, sy = 0, ox = 0, oy = 0;
 
     root.addEventListener("touchstart", e => {
-      if (!state.collapsed) return;
+      if (!uiState.collapsed) return;
       dragging = true;
       const t = e.touches[0];
       sx = t.clientX;
@@ -280,18 +271,14 @@ btnLog {
       oy = rect.top;
     });
 
-    root.addEventListener(
-      "touchmove",
-      e => {
-        if (!dragging || !state.collapsed) return;
-        e.preventDefault();
-        const t = e.touches[0];
-        root.style.left = `${ox + (t.clientX - sx)}px`;
-        root.style.top = `${oy + (t.clientY - sy)}px`;
-        root.style.right = "";
-      },
-      { passive: false }
-    );
+    root.addEventListener("touchmove", e => {
+      if (!dragging || !uiState.collapsed) return;
+      e.preventDefault();
+      const t = e.touches[0];
+      root.style.left = `${ox + (t.clientX - sx)}px`;
+      root.style.top = `${oy + (t.clientY - sy)}px`;
+      root.style.right = "";
+    }, { passive: false });
 
     root.addEventListener("touchend", () => {
       dragging = false;
@@ -311,7 +298,7 @@ btnLog {
       longPressed = false;
       timer = setTimeout(() => {
         longPressed = true;
-        if (!state.collapsed) {
+        if (!uiState.collapsed) {
           window.postMessage(
             { from: "tora-ui", cmd: "ui-open-log-viewer" },
             "*"
@@ -330,8 +317,8 @@ btnLog {
   // UI 折りたたみ
   // ---------------------------
   function toggleUI(root) {
-    state.collapsed = !state.collapsed;
-    if (state.collapsed) {
+    uiState.collapsed = !uiState.collapsed;
+    if (uiState.collapsed) {
       root.classList.add("collapsed");
       root.classList.remove("expanded");
     } else {
@@ -347,40 +334,36 @@ btnLog {
   // ボタンバインド
   // ---------------------------
   function bindButtons(root) {
-    // Repair
     document.getElementById("btnRepair").addEventListener("click", () => {
-      state.repairEnabled = !state.repairEnabled;
+      uiState.repairEnabled = !uiState.repairEnabled;
       updateRepairButton();
-      sendToFront("ui-config", { repairEnabled: state.repairEnabled });
+      sendToFront("ui-config", { repairEnabled: uiState.repairEnabled });
     });
 
-    // Mode
     document.getElementById("btnMode").addEventListener("click", () => {
       const order = ["A", "B", "N"];
-      const idx = order.indexOf(state.equipMode);
-      state.equipMode = order[(idx + 1) % order.length];
+      const idx = order.indexOf(uiState.equipMode);
+      uiState.equipMode = order[(idx + 1) % order.length];
       updateModeButton();
-      sendToFront("ui-config", { equipMode: state.equipMode });
+      sendToFront("ui-config", { equipMode: uiState.equipMode });
     });
 
-    // Delay
     document.getElementById("btnDelay").addEventListener("click", () => {
       const order = [0, 500, 1000, 1500, 2000];
-      const idx = order.indexOf(state.delayMs);
-      state.delayMs = order[(idx + 1) % order.length];
+      const idx = order.indexOf(uiState.delayMs);
+      uiState.delayMs = order[(idx + 1) % order.length];
       updateDelayButton();
-      sendToFront("ui-config", { delayMs: state.delayMs });
+      sendToFront("ui-config", { delayMs: uiState.delayMs });
     });
 
-    // HPアイテム
     document.getElementById("btnHpItem").addEventListener("click", () => {
-      const total = state.hpItems.length + 1;
-      state.hpIndex = (state.hpIndex + 1) % total;
+      const total = uiState.hpItems.length + 1;
+      uiState.hpIndex = (uiState.hpIndex + 1) % total;
 
-      if (state.hpIndex === 0) {
+      if (uiState.hpIndex === 0) {
         sendToFront("ui-config", { targetHpName: null });
       } else {
-        const item = state.hpItems[state.hpIndex - 1];
+        const item = uiState.hpItems[uiState.hpIndex - 1];
         sendToFront("ui-config", { targetHpName: item.name });
       }
 
@@ -397,8 +380,8 @@ btnLog {
       if (from !== "tora-front") return;
 
       if (cmd === "ui-update-items") {
-        state.hpItems = payload.items || [];
-        state.autoSelectedItem = payload.autoSelectedItem || null;
+        uiState.hpItems = payload.items || [];
+        uiState.autoSelectedItem = payload.autoSelectedItem || null;
         updateHpItemDisplay();
       }
     });
@@ -408,7 +391,6 @@ btnLog {
   // 初期化
   // ---------------------------
   function init() {
-    injectUICSS();
     const root = createUI();
     if (!root) return;
 
@@ -428,13 +410,13 @@ btnLog {
 
   init();
 
-// ★ UI 常駐監視ループ（100msごとにUIが消えていないか確認）
-setInterval(() => {
-  if (!document.getElementById("tora-ui")) {
-    // UI が消えていたら即復活
-    init();
-  }
-}, 100);
+  // UI 常駐監視ループ
+  setInterval(() => {
+    if (!document.getElementById("tora-ui")) {
+      init();
+    }
+  }, 100);
+
 })();
 
   // ============================================================
