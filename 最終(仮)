@@ -1066,52 +1066,59 @@ function sanitizeForSession(name) {
         const idx = { A: 0, B: 1, N: 2 }[state.equipMode] ?? 0;
         if (radios[idx] && !radios[idx].checked) radios[idx].click();
 
-        const items = Array.from(
-          popup.querySelectorAll("li.itemHP")
-        ).map(li => {
-          const ps = li.querySelectorAll("p");
-          const name = ps[0]?.innerText || "";
-          const remainText = ps[2]?.innerText || "";
-          const remaining = parseInt(
-            (remainText.match(/残り(\d+)回/) || [])[1] || "0",
-            10
-          );
-          const isFull = name.includes("全回復");
-          return { name, remaining, isFull, element: li };
-        });
-        state.availableItems = items;
+        // ★ HPアイテム一覧の取得
+const items = Array.from(
+  popup.querySelectorAll("li.itemHP")
+).map(li => {
+  const ps = li.querySelectorAll("p");
+  const name = ps[0]?.innerText || "";
+  const remainText = ps[2]?.innerText || "";
+  const remaining = parseInt(
+    (remainText.match(/残り(\d+)回/) || [])[1] || "0",
+    10
+  );
+  const isFull = name.includes("全回復");
+  return { name, remaining, isFull, element: li };
+});
+state.availableItems = items;
 
-        // front に転送
-        window.parent.postMessage(
-          {
-            from: "tora-backend",
-            cmd: "backend-state",
-            payload: { availableItems: items }
-          },
-          "*"
-        );
+// ★ Free or 指定アイテムで target を決定
+let target = null;
+if (state.targetHpName === "FREE") {
+  target =
+    items.find(i => i.isFull && i.remaining > 0) ||
+    items.find(i => !i.isFull && i.remaining > 0);
+} else {
+  target = items.find(
+    i => i.name.includes(state.targetHpName) && i.remaining > 0
+  );
+}
 
-        let target = null;
-        if (state.targetHpName === "FREE") {
-          target =
-            items.find(i => i.isFull && i.remaining > 0) ||
-            items.find(i => !i.isFull && i.remaining > 0);
-        } else {
-          target = items.find(
-            i => i.name.includes(state.targetHpName) && i.remaining > 0
-          );
-        }
+// ★ front に items + autoSelectedItem を返す（UI 新仕様対応）
+window.parent.postMessage(
+  {
+    from: "tora-backend",
+    cmd: "backend-state",
+    payload: {
+      availableItems: items,
+      autoSelectedItem: target || null
+    }
+  },
+  "*"
+);
 
-        if (!target) {
-          clearInterval(timer);
-          disposeHealIframe();
-          state.phase = "IDLE";
-          log("HEAL: no HP items, give up.");
-          return;
-        }
+// ★ target が無い場合は終了
+if (!target) {
+  clearInterval(timer);
+  disposeHealIframe();
+  state.phase = "IDLE";
+  log("HEAL: no HP items, give up.");
+  return;
+}
 
-        target.element.click();
-        clearInterval(timer);
+// ★ target をクリックして回復実行
+target.element.click();
+clearInterval(timer);
 
         const timer2 = setInterval(() => {
           const d2 = ifr.contentDocument;
