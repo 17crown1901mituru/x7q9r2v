@@ -1186,56 +1186,56 @@ clearInterval(timer);
       log(`SESSION: 抗争終了 → 結果: ${state.session.result}`);
 
       // ★★★ timeline 統合（action + response） ★★★
-      const timeline = [
-        ...state.logs.action.map(a => ({
-          type: "action",
-          time: a.time,
-          message: a.message
-        })),
-        ...state.logs.response.map(r => ({
-          type: "response",
-          time: r.time,
-          kind: r.kind,
-          url: r.url,
-          status: r.status,
-          size: r.size
-        }))
-      ].sort((a, b) => a.time - b.time);
+const timeline = [
+  ...state.logs.action.map(a => ({
+    type: "action",
+    time: a.time,
+    message: a.message
+  })),
+  ...state.logs.response.map(r => ({
+    type: "response",
+    time: r.time,
+    kind: r.kind,
+    url: r.url,
+    status: r.status,
+    size: r.size
+  }))
+].sort((a, b) => a.time - b.time);
 
-      // ★★★ front へ送信（backend-session に統一） ★★★
-      try {
-        window.parent.postMessage(
-          {
-            from: "tora-backend",
-            cmd: "backend-session",
-            payload: {
-              session: state.session,
-              logs: { timeline }
-            }
-          },
-          "*"
-        );
-      } catch (_) {
-        // 送信失敗は無視
+// ★★★ front へ送信（backend-session に統一） ★★★
+try {
+  window.parent.postMessage(
+    {
+      from: "tora-backend",
+      cmd: "backend-session",
+      payload: {
+        session: state.session,
+        logs: { timeline }
       }
+    },
+    "*"
+  );
+} catch (_) {
+  // 送信失敗は無視
+}
 
-      // ★★★ ログリセット ★★★
-      state.session = null;
-      state.logs.action = [];
-      state.logs.response = [];
-    }
+// ★★★ ログリセット ★★★
+state.session = null;
+state.logs.action = [];
+state.logs.response = [];
+}
 
-    function detectResult(html) {
-      if (html.includes("勝利")) return "WIN";
-      if (html.includes("敗北")) return "LOSE";
-      return "DRAW";
-    }
+function detectResult(html) {
+  if (html.includes("勝利")) return "WIN";
+  if (html.includes("敗北")) return "LOSE";
+  return "DRAW";
+}
 
-    // デバッグ用
-    window.__toraBackendState = state;
+// デバッグ用
+window.__toraBackendState = state;
 
-    log("Tora backend engine (guard+heal+session+timeline) initialized.");
-  })();
+log("Tora backend engine (guard+heal+session+timeline) initialized.");
+})();   // ★★★ backend IIFE はここで閉じる（正しい位置）
 
 // ============================================================
 //  ログビューア（timeline / front log）
