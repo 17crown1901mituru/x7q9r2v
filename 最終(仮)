@@ -1,1533 +1,888 @@
 // ==UserScript==
-// @name         Tora Sync 三層完全統合版
-// @namespace    https://tantora.jp/
-// @version      1.1.0
-// @author       光琉✞みつる
-// @description  単虎 抗争用 UI＋表エンジン＋裏エンジンを統合し、修理・回復・ディレイ・ログ管理（timeline）を一括制御するスクリプト
-// @match        https://tantora.jp/*
-// @run-at       document-start
+// @name         Tantora_SubGateway_Integrated_Final
+// @namespace    http://oitsuru.net/
+// @version      1.2
+// @description  抗争セッション管理＋事前/ファイナルスキャン＋突入制御＋ロギング完全版
+// @match        *://tantora.jp/*
 // @grant        none
+// @run-at       document-start
 // ==/UserScript==
 
 (function() {
-  "use strict";
-
-  // ============================================================
-  //  共通：簡易ログユーティリティ（front 用）
-  // ============================================================
-  const LOG_KEY = "sneakyjs_front_log";
-
-  function nowStamp() {
-    const d = new Date();
-    const pad = n => String(n).padStart(2, "0");
-    return (
-      `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())} ` +
-      `${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}`
-    );
-  }
-
-  function logLine(msg) {
-    return `[${nowStamp()}] ${msg}`;
-  }
-
-  function sanitizeName(name) {
-    return String(name || "").replace(/[\/\\:*?"<>|]/g, "_");
-  }
-
-  function saveFrontLog(msg) {
-    try {
-      const logs = JSON.parse(localStorage.getItem(LOG_KEY) || "[]");
-      const line = logLine(msg);
-      const last = logs[logs.length - 1];
-      if (last !== line) {
-        logs.push(line);
-        localStorage.setItem(LOG_KEY, JSON.stringify(logs));
-      }
-    } catch (_) {}
-  }
-
-  // ============================================================
-  //  UI 全体で共有する state（★ここが重要★）
-  // ============================================================
-  const uiState = {
-    collapsed: true,
-    repairEnabled: false,
-    equipMode: "N",
-    delayMs: 0,
-    hpItems: [],
-    hpIndex: 0,
-    autoSelectedItem: null
-  };
-
-  // ============================================================
-  //  UI 層（リモコン）
-  // ============================================================
-  (function initUI() {
-    if (window.__toraUIInitialized) return;
-    window.__toraUIInitialized = true;
-
-    function injectUICSS() {
-      const css = `
-#tora-ui {
-  position: fixed;
-  top: 10px;
-  right: 10px;
-  z-index: 999999;
-  font-size: 13px;
-  user-select: none;
-}
-#tora-ui.collapsed .tora-btn:not(#btnLog) {
-  display: none;
-}
-.tora-btn {
-  width: 80px;
-  height: 40px;
-  margin-bottom: 6px;
-  background: #333;
-  color: #fff;
-  border-radius: 6px;
-  text-align: center;
-  line-height: 18px;
-  padding-top: 4px;
-  box-sizing: border-box;
-  font-size: 13px;
-}
-.tora-btn.hp-item {
-  height: 60px;
-  line-height: 16px;
-  font-size: 13px;
-}
-.tora-btn.hp-count {
-  background: rgba(0,0,0,0.95);
-  color: #0f0;
-  font-size: 13px;
-}
-#btnLog {
-  background: #09f;
-}
-      `;
-      const style = document.createElement("style");
-      style.textContent = css;
-      document.head.appendChild(style);
-    }
-
-    injectUICSS();
-  })();
-
-  // ---------------------------
-  // UI 生成
-  // ---------------------------
-  function createUI() {
-    if (document.getElementById("tora-ui")) return null;
-
-    const root = document.createElement("div");
-    root.id = "tora-ui";
-    root.className = "collapsed";
-
-    root.innerHTML = `
-      <div class="tora-btn" id="btnRepair">Repair<br>OFF</div>
-      <div class="tora-btn" id="btnMode">Mode: N</div>
-      <div class="tora-btn" id="btnDelay">Delay OFF</div>
-      <div class="tora-btn hp-item" id="btnHpItem">Free</div>
-      <div class="tora-btn hp-count" id="hpCount">-- / --</div>
-      <div class="tora-btn" id="btnLog">LOG</div>
-    `;
-
-    document.body.appendChild(root);
-    return root;
-  }
-
-  function sendToFront(cmd, payload = {}) {
-    window.postMessage({ from: "tora-ui", cmd, payload }, "*");
-  }
-
-  // ---------------------------
-  // HPアイテム表示更新
-  // ---------------------------
-  function updateHpItemDisplay() {
-    const btn = document.getElementById("btnHpItem");
-    const count = document.getElementById("hpCount");
-    if (!btn || !count) return;
-
-    if (uiState.hpIndex === 0) {
-      btn.style.background = "rgba(0,0,0,0.95)";
-      btn.style.color = "#c0f";
-      btn.innerHTML = "Free";
-
-      if (uiState.autoSelectedItem) {
-        const r = uiState.autoSelectedItem.remaining ?? "--";
-        count.textContent = `${r} / ${r}`;
-      } else {
-        count.textContent = "-- / --";
-      }
-      return;
-    }
-
-    const item = uiState.hpItems[uiState.hpIndex - 1];
-    if (!item) {
-      btn.innerHTML = "---";
-      count.textContent = "-- / --";
-      return;
-    }
-
-    let name = item.name || "";
-    if (name.length > 10) name = name.slice(0, 10) + "…";
-
-    const line1 = name.slice(0, 5);
-    const line2 = name.slice(5);
-
-    btn.style.background = "rgba(0,0,0,0.95)";
-    btn.style.color = "#c0f";
-    btn.innerHTML = `${line1}<br>${line2}`;
-
-    const r = item.remaining ?? "--";
-    count.textContent = `${r} / ${r}`;
-  }
-
-  // ---------------------------
-  // Repair ボタン
-  // ---------------------------
-  function updateRepairButton() {
-    const btn = document.getElementById("btnRepair");
-    if (!btn) return;
-    if (uiState.repairEnabled) {
-      btn.innerHTML = "Repair<br>ON";
-      btn.style.background = "#5bc0de";
-      btn.style.color = "#000";
-    } else {
-      btn.innerHTML = "Repair<br>OFF";
-      btn.style.background = "#666";
-      btn.style.color = "#fff";
-    }
-  }
-
-  // ---------------------------
-  // Mode トグル
-  // ---------------------------
-  function updateModeButton() {
-    const btn = document.getElementById("btnMode");
-    if (!btn) return;
-
-    btn.textContent = `Mode: ${uiState.equipMode}`;
-
-    if (uiState.equipMode === "A") {
-      btn.style.background = "#ff0";
-      btn.style.color = "#000";
-    } else if (uiState.equipMode === "B") {
-      btn.style.background = "#f00";
-      btn.style.color = "#fff";
-    } else {
-      btn.style.background = "#fff";
-      btn.style.color = "#000";
-    }
-  }
-
-  // ---------------------------
-  // Delay トグル
-  // ---------------------------
-  function updateDelayButton() {
-    const btn = document.getElementById("btnDelay");
-    if (!btn) return;
-
-    const d = uiState.delayMs;
-    let text = "";
-    let bg = "";
-    let color = "#000";
-
-    if (d === 0) {
-      text = "Delay OFF";
-      bg = "#ff0";
-    } else {
-      text = `D:${d}`;
-      if (d === 500) bg = "#0f0";
-      else if (d === 1000) bg = "#0ff";
-      else if (d === 1500) bg = "#fa0";
-      else if (d === 2000) {
-        bg = "#f00";
-        color = "#fff";
-      }
-    }
-
-    btn.textContent = text;
-    btn.style.background = bg;
-    btn.style.color = color;
-  }
-
-  // ---------------------------
-  // ドラッグ
-  // ---------------------------
-  function enableDrag(root) {
-    let dragging = false;
-    let sx = 0, sy = 0, ox = 0, oy = 0;
-
-    root.addEventListener("touchstart", e => {
-      if (!uiState.collapsed) return;
-      dragging = true;
-      const t = e.touches[0];
-      sx = t.clientX;
-      sy = t.clientY;
-      const rect = root.getBoundingClientRect();
-      ox = rect.left;
-      oy = rect.top;
-    });
-
-    root.addEventListener("touchmove", e => {
-      if (!dragging || !uiState.collapsed) return;
-      e.preventDefault();
-      const t = e.touches[0];
-      root.style.left = `${ox + (t.clientX - sx)}px`;
-      root.style.top = `${oy + (t.clientY - sy)}px`;
-      root.style.right = "";
-    }, { passive: false });
-
-    root.addEventListener("touchend", () => {
-      dragging = false;
-    });
-  }
-
-  // ---------------------------
-  // LOG ボタン
-  // ---------------------------
-  function bindLogButton(root) {
-    const btn = document.getElementById("btnLog");
-    let timer = null;
-    let longPressed = false;
-    const longPress = 600;
-
-    btn.addEventListener("touchstart", () => {
-      longPressed = false;
-      timer = setTimeout(() => {
-        longPressed = true;
-        if (!uiState.collapsed) {
-          window.postMessage(
-            { from: "tora-ui", cmd: "ui-open-log-viewer" },
-            "*"
-          );
-        }
-      }, longPress);
-    });
-
-    btn.addEventListener("touchend", () => {
-      if (timer) clearTimeout(timer);
-      if (!longPressed) toggleUI(root);
-    });
-  }
-
-  // ---------------------------
-  // UI 折りたたみ
-  // ---------------------------
-  function toggleUI(root) {
-    uiState.collapsed = !uiState.collapsed;
-    if (uiState.collapsed) {
-      root.classList.add("collapsed");
-      root.classList.remove("expanded");
-    } else {
-      root.classList.add("expanded");
-      root.classList.remove("collapsed");
-      root.style.top = "10px";
-      root.style.right = "10px";
-      root.style.left = "";
-    }
-  }
-
-  // ---------------------------
-  // ボタンバインド
-  // ---------------------------
-  function bindButtons(root) {
-    document.getElementById("btnRepair").addEventListener("click", () => {
-      uiState.repairEnabled = !uiState.repairEnabled;
-      updateRepairButton();
-      sendToFront("ui-config", { repairEnabled: uiState.repairEnabled });
-    });
-
-    document.getElementById("btnMode").addEventListener("click", () => {
-      const order = ["A", "B", "N"];
-      const idx = order.indexOf(uiState.equipMode);
-      uiState.equipMode = order[(idx + 1) % order.length];
-      updateModeButton();
-      sendToFront("ui-config", { equipMode: uiState.equipMode });
-    });
-
-    document.getElementById("btnDelay").addEventListener("click", () => {
-      const order = [0, 500, 1000, 1500, 2000];
-      const idx = order.indexOf(uiState.delayMs);
-      uiState.delayMs = order[(idx + 1) % order.length];
-      updateDelayButton();
-      sendToFront("ui-config", { delayMs: uiState.delayMs });
-    });
-
-    document.getElementById("btnHpItem").addEventListener("click", () => {
-      const total = uiState.hpItems.length + 1;
-      uiState.hpIndex = (uiState.hpIndex + 1) % total;
-
-      if (uiState.hpIndex === 0) {
-        sendToFront("ui-config", { targetHpName: null });
-      } else {
-        const item = uiState.hpItems[uiState.hpIndex - 1];
-        sendToFront("ui-config", { targetHpName: item.name });
-      }
-
-      updateHpItemDisplay();
-    });
-  }
-
-  // ---------------------------
-  // front → UI
-  // ---------------------------
-  function bindUIIncoming() {
-    window.addEventListener("message", e => {
-      const { from, cmd, payload } = e.data || {};
-      if (from !== "tora-front") return;
-
-      if (cmd === "ui-update-items") {
-        uiState.hpItems = payload.items || [];
-        uiState.autoSelectedItem = payload.autoSelectedItem || null;
-        updateHpItemDisplay();
-      }
-    });
-  }
-
-  // ---------------------------
-  // 初期化
-  // ---------------------------
-  function init() {
-    const root = createUI();
-    if (!root) return;
-
-    enableDrag(root);
-    bindLogButton(root);
-    bindButtons(root);
-    bindUIIncoming();
-
-    root.classList.add("expanded");
-    root.classList.remove("collapsed");
-
-    updateRepairButton();
-    updateModeButton();
-    updateDelayButton();
-    updateHpItemDisplay();
-  }
-
-  init();
-
-  // UI 常駐監視ループ
-  setInterval(() => {
-    if (!document.getElementById("tora-ui")) {
-      init();
-    }
-  }, 100);
-
-})();
-
-  // ============================================================
-  //  表エンジン（front）
-  // ============================================================
-  (function initFront() {
-    if (!location.pathname.startsWith("/my")) return;
-    if (window.__toraFrontInitialized) return;
-    window.__toraFrontInitialized = true;
-
-    const STORE_KEY = "sneakyjs_next_war";
-
-    let backendFrame = null;
-
-    function loadSavedWar() {
-      try {
-        return JSON.parse(localStorage.getItem(STORE_KEY) || "null");
-      } catch (_) {
-        return null;
-      }
-    }
-
-    function saveWar(info) {
-      localStorage.setItem(STORE_KEY, JSON.stringify(info));
-      saveFrontLog(`抗争情報保存: ${info.rawText}`);
-    }
-
-    function clearWar() {
-      localStorage.removeItem(STORE_KEY);
-      saveFrontLog("抗争情報破棄");
-    }
-
-    function detectWarLink() {
-      const links = Array.from(
-        document.querySelectorAll('a[href*="team/other?team_id="]')
-      );
-      for (const a of links) {
-        const text = a.innerText.replace(/\s+/g, " ").trim();
-        if (!text.includes("勃発!!") || !text.includes("開戦")) continue;
-        const href = a.href;
-        const enemyTeamId = new URL(href).searchParams.get("team_id");
-        const enemyTeamName = text.split("と")[0];
-        const startAt = parseStart(text);
-        return {
-          enemyTeamId,
-          enemyTeamName,
-          startAt,
-          rawText: text
-        };
-      }
-      return null;
-    }
-
-    function detectHeader() {
-      const imgs = Array.from(
-        document.querySelectorAll("#header_menu img, section img")
-      );
-      let war = false,
-        ajito = false;
-      for (const img of imgs) {
-        const src = img.src;
-        if (src.includes("war.jpg")) war = true;
-        if (src.includes("ajito.jpg")) ajito = true;
-      }
-      if (war) return "war";
-      if (ajito) return "ajito";
-      return "none";
-    }
-
-function refreshWarInfo(warInfo, header, saved) {
-      if (warInfo) {
-        if (!saved) return saveWar(warInfo);
-        if (
-          saved.enemyTeamId !== warInfo.enemyTeamId ||
-          saved.startAt !== warInfo.startAt ||
-          saved.rawText !== warInfo.rawText
-        ) {
-          return saveWar(warInfo);
-        }
-        return;
-      }
-      if (header === "ajito" && saved) clearWar();
-    }
-
-    function schedule(saved, header) {
-      if (header === "war") {
-        startBackendNow();
-        return;
-      }
-
-      if (!saved) return;
-
-      const now = Date.now();
-      const diff = saved.startAt - now;
-
-      if (diff <= 2000) {
-        clearWar();
-        startBackendNow();
-        return;
-      }
-
-      if (diff <= 10000) {
-        ensureIframe(saved);
-        setTimeout(() => {
-          clearWar();
-          startBackendNow();
-        }, diff - 2000);
-        return;
-      }
-
-      setTimeout(() => schedule(saved, detectHeader()), 1000);
-    }
-
-    function ensureIframe(saved) {
-      if (document.getElementById("sneakyjs-war-iframe")) return;
-
-      const iframe = document.createElement("iframe");
-      iframe.id = "sneakyjs-war-iframe";
-      iframe.src = "https://tantora.jp/team/war";
-      iframe.style.position = "fixed";
-      iframe.style.bottom = "0";
-      iframe.style.right = "0";
-      iframe.style.width = "100%";
-      iframe.style.height = "50%";
-      iframe.style.border = "none";
-      iframe.style.zIndex = "2147483647";
-      document.body.appendChild(iframe);
-
-      iframe.onload = () => {
-        iframe.contentWindow.postMessage(
-          {
-            from: "tora-front",
-            cmd: "backend-start",
-            payload: {
-              enemyTeamName: saved?.enemyTeamName || "",
-              startAt: saved?.startAt || Date.now()
-            }
-          },
-          "*"
-        );
-      };
-
-      backendFrame = iframe;
-      saveFrontLog("裏エンジン準備（iframe生成）");
-    }
-
-    function startBackendNow() {
-      ensureIframe(loadSavedWar());
-      saveFrontLog("裏エンジン即時始動");
-    }
-
-    // ★★★ この handleBackendSession は Part4 で timeline 対応版に差し替える ★★★
-    function handleBackendSession({ session, logs }) {
-      const fileName = `${session.sessionId}_${sanitizeName(
-        session.enemyTeamName
-      )}_${session.result}`;
-      saveFrontLog(`裏ログ受信 → ${fileName}`);
-      try {
-        localStorage.setItem(
-          `session_${fileName}`,
-          JSON.stringify({ session, logs })
-        );
-      } catch (_) {
-        // 保存失敗は無視
-      }
-    }
-
-    function parseStart(text) {
-      const re = /(\d{2})\/(\d{2})\s+(\d{1,2})時(\d{1,2})分開戦/;
-      const m = text.match(re);
-      const now = new Date();
-      if (!m) return now.getTime();
-      return new Date(
-        now.getFullYear(),
-        m[1] - 1,
-        m[2],
-        m[3],
-        m[4]
-      ).getTime();
-    }
-
-    function sendToBackend(cmd, payload = {}) {
-      const iframe = backendFrame || document.getElementById("sneakyjs-war-iframe");
-      if (!iframe || !iframe.contentWindow) return;
-      iframe.contentWindow.postMessage(
-        { from: "tora-front", cmd, payload },
-        "*"
-      );
-    }
-
-    function sendToUI(cmd, payload = {}) {
-      window.postMessage({ from: "tora-front", cmd, payload }, "*");
-    }
-
-    // UI → front
-    window.addEventListener("message", e => {
-      const { from, cmd, payload } = e.data || {};
-      if (from !== "tora-ui") return;
-
-      if (cmd === "ui-config") {
-        sendToBackend("backend-config", payload);
-      }
-
-      if (cmd === "ui-open-log-viewer") {
-        window.open("https://tantora.jp/my?logviewer=1", "_blank");
-      }
-    });
-
-    // backend → front
-    window.addEventListener("message", e => {
-      const { from, cmd, payload } = e.data || {};
-      if (from !== "tora-backend") return;
-
-      if (cmd === "backend-state") {
-  // backend は { availableItems: [...], autoSelectedItem: {...} } を返す
-  if (payload.availableItems) {
-    sendToUI("ui-update-items", {
-      items: payload.availableItems,
-      autoSelectedItem: payload.autoSelectedItem || null
-    });
-  }
-}
-
-      // ★★★ この backend-session-complete は Part4 で backend-session に変更される ★★★
-      if (cmd === "backend-session-complete") {
-        handleBackendSession(payload);
-      }
-    });
-
-    (function main() {
-      const warInfo = detectWarLink();
-      const header = detectHeader();
-      const saved = loadSavedWar();
-
-      refreshWarInfo(warInfo, header, saved);
-      const updated = loadSavedWar();
-      schedule(updated, header);
-    })();
-  })();
-
-(function backend() {
-// ============================================================
-    //  裏エンジン（backend） ログ対応版
-    // ============================================================
-
-    // ★★★ logs を action + response に拡張（差分適用） ★★★
-    const state = {
-      phase: "IDLE",
-      delayMs: 0,
-      repairEnabled: true,
-      equipMode: "A",
-      targetHpName: "FREE",
-      lastStatus: {
-        hpNow: null,
-        hpMax: null,
-        stNow: null,
-        stMax: null,
-        spNow: null,
-        spMax: null,
-        hospitalized: false
-      },
-      stConfig: { threshold: 5, itemId: 1719 },
-      spConfig: { threshold: 100, itemId: 1721 },
-      enemyTeamId: null,
-      availableItems: [],
-
-      // ★★★ ここがログ機能最終差分の重要ポイント ★★★
-      logs: {
-        action: [],
-        response: []
-      },
-
-      session: null,
-      warEnded: false
+    'use strict';
+
+    /**************************************************
+     *  共通キー（Viewer / 攻撃スクリプトと完全互換）
+     **************************************************/
+    const KEYS = {
+        WAR_SESSIONS: 'tantora_session_store',
+        SYS_SESSIONS: 'tantora_system_store',
+        ACTIVE_ID: 'tantora_active_session_id',
+        ACTIVE_TID: 'active_war_tid',
+        STRATEGY: 'strategy_',
+        FINAL: 'strategy_',
+        FINAL_DONE: 'war_final_adjust_done',
+        ATTACK_KILL: 'tantora_attack_kill_flag'
     };
 
-    // ★★★ log() をオブジェクト形式に変更（差分適用） ★★★
-    function log(msg) {
-      state.logs.action.push({
-        type: "action",
-        time: Date.now(),
-        message: msg
-      });
-    }
+    /**************************************************
+     *  内部状態
+     **************************************************/
+    let isPreScanning = false;
+    let isFinalScanning = false;
+    let isEnteringWar = false;
+    let finalScanTimer = null;
+    let warEntryTimer = null;
 
-    // UI / front からの設定反映
-    function applyConfigFromUI(cfg) {
-      if (!cfg || typeof cfg !== "object") return;
-      if ("repairEnabled" in cfg) state.repairEnabled = !!cfg.repairEnabled;
-      if ("equipMode" in cfg && ["A", "B", "N"].includes(cfg.equipMode)) {
-        state.equipMode = cfg.equipMode;
-      }
-      if ("delayMs" in cfg) state.delayMs = Number(cfg.delayMs) || 0;
-      if ("targetHpName" in cfg) state.targetHpName = cfg.targetHpName || "FREE";
-      if ("enemyTeamId" in cfg) state.enemyTeamId = cfg.enemyTeamId || null;
-      if (cfg.stConfig) Object.assign(state.stConfig, cfg.stConfig);
-      if (cfg.spConfig) Object.assign(state.spConfig, cfg.spConfig);
+    const now = () => new Date();
+    const logTime = () => now().toLocaleTimeString('ja-JP');
 
-      log(`CONFIG UPDATED: ${JSON.stringify(cfg)}`);
-    }
+    /**************************************************
+     *  ログ保存（Viewer互換）
+     **************************************************/
+    const pushWarLog = (type, data) => {
+        const sid = localStorage.getItem(KEYS.ACTIVE_ID);
+        if (!sid) return;
 
-    // front → backend
-    window.addEventListener("message", e => {
-      const data = e.data;
-      if (!data || typeof data !== "object") return;
-      const { from, cmd, payload } = data;
+        let store = {};
+        try { store = JSON.parse(localStorage.getItem(KEYS.WAR_SESSIONS) || "{}"); }
+        catch(e){ store = {}; }
 
-      if (from === "tora-front" && cmd === "backend-start") {
-        const { enemyTeamName, startAt } = payload || {};
-        startSession(enemyTeamName, startAt);
-      }
-
-      if (from === "tora-front" && cmd === "backend-config") {
-        applyConfigFromUI(payload || {});
-      }
-    });
-
-    function startSession(enemyTeamName, startAt) {
-      const ts = startAt || Date.now();
-      state.session = {
-        sessionId: formatSessionId(ts),
-        enemyTeamName: sanitizeForSession(enemyTeamName || ""),
-        startAt: ts,
-        endAt: null,
-        result: null
-      };
-      state.warEnded = false;
-      log("SESSION: 抗争開始（裏エンジン監視開始）");
-    }
-function sanitizeForSession(name) {
-
-  return (name || "")
-
-    .replace(/[^\u0000-\u007F々一-龠ぁ-んァ-ン0-9０-９A-Za-zＡ-Ｚａ-ｚ]/g, "")
-
-    .slice(0, 20);
-
-}
-
-    function formatSessionId(ts) {
-      const d = new Date(ts);
-      const pad = n => String(n).padStart(2, "0");
-      return (
-        `${d.getFullYear()}${pad(d.getMonth() + 1)}${pad(d.getDate())}-` +
-        `${pad(d.getHours())}${pad(d.getMinutes())}${pad(d.getSeconds())}`
-      );
-    }
-
-    function ensureHealIframe() {
-      let ifr = document.getElementById("tora_heal_iframe");
-      if (!ifr) {
-        ifr = document.createElement("iframe");
-        ifr.id = "tora_heal_iframe";
-        Object.assign(ifr.style, {
-          position: "fixed",
-          width: "0",
-          height: "0",
-          border: "0",
-          left: "-9999px",
-          top: "-9999px"
-        });
-        document.body.appendChild(ifr);
-      }
-      return ifr;
-    }
-
-    function disposeHealIframe() {
-      const ifr = document.getElementById("tora_heal_iframe");
-      if (ifr && ifr.parentNode) ifr.parentNode.removeChild(ifr);
-    }
-
-    // ============================================================
-    //  fetch フック（ログ対応版）
-    // ============================================================
-    (function hookFetch() {
-      if (window.__toraFetchHooked) return;
-      window.__toraFetchHooked = true;
-
-      const originalFetch = window.fetch.bind(window);
-
-      function classifyResponse(url) {
-  // 攻撃
-  if (url.includes("/war/battle?other/")) {
-    return "attack";
-  }
-
-  // 回復アイテム使用
-  if (url.includes("/use-item-exec")) {
-    return "heal";
-  }
-
-  // 修理（確認・完了）
-  if (
-    url.includes("/item/repair-confirm") ||
-    url.includes("/item/repair-done")
-  ) {
-    return "repair";
-  }
-
-  // どれにも該当しない
-  return null;
-}
-
-      window.fetch = async function(input, init) {
-        const url =
-          typeof input === "string"
-            ? input
-            : input && input.url
-              ? input.url
-              : "";
-
-        // 攻撃ディレイ
-        if (url.includes("/war/battle?other/")) {
-          if (state.phase !== "IDLE") {
-            log("BLOCK: Attack during HEAL/REPAIR phase.");
-            return new Response(null, {
-              status: 403,
-              statusText: "War backend busy"
-            });
-          }
-          if (state.delayMs > 0) {
-            await new Promise(r => setTimeout(r, state.delayMs));
-            log(`DELAY: Attack delayed ${state.delayMs}ms`);
-          }
+        if (!store[sid]) {
+            const tid = localStorage.getItem(KEYS.ACTIVE_TID) || "0";
+            store[sid] = {
+                info: { tid, start: "不明", enemy: "不明" },
+                logs: []
+            };
         }
 
-        const res = await originalFetch(input, init);
-        const ct = res.headers.get("content-type") || "";
-        if (!ct.includes("text/html")) return res;
-
-        const clone = res.clone();
-
-        // ★★★ レスポンスログ追加（差分適用） ★★★
-        clone.text().then(html => {
-          try {
-            const kind = classifyResponse(url);
-            if (kind) {
-              state.logs.response.push({
-                type: "response",
-                time: Date.now(),
-                kind,
-                url,
-                status: res.status,
-                size: html.length
-              });
-            }
-
-            analyzeHtmlAndUpdateState(html);
-            detectWarEnd(html);
-          } catch (_) {}
+        store[sid].logs.push({
+            t: logTime(),
+            type,
+            d: data
         });
+
+        if (store[sid].logs.length > 200) store[sid].logs.shift();
+        localStorage.setItem(KEYS.WAR_SESSIONS, JSON.stringify(store));
+    };
+
+    /**************************************************
+     *  抗争勃発!!リンク解析
+     **************************************************/
+function parseWarLink(html) {
+        const reg = /team_id=(\d+)[^>]*>([^<]+?)と抗争勃発!!<br\s*\/?>(\d{2}\/\d{2}\s\d{2}時\d{2}分)開戦/;
+        const m = html.match(reg);
+        if (!m) return null;
+
+        return {
+            tid: m[1],
+            enemy: m[2].trim(),
+            startStr: m[3]
+        };
+    }
+
+    function parseWarDate(startStr) {
+        const m = startStr.match(/(\d{2})\/(\d{2})\s(\d{2})時(\d{2})分/);
+        if (!m) return null;
+        const y = now().getFullYear();
+        return new Date(y, m[1]-1, m[2], m[3], m[4]);
+    }
+
+    function buildSessionId(tid, startStr) {
+        const compact = startStr.replace(/[^\d]/g, '').slice(0, 8);
+        return `${tid}_${compact}`;
+    }
+
+    function isSameSession(existingSid, tid, startStr) {
+        if (!existingSid) return false;
+        const parts = existingSid.split('_');
+        const sidTid = parts[0];
+        const sidTime = parts[1];
+        const newTime = startStr.replace(/[^\d]/g, '').slice(0, 8);
+        return sidTid === tid && sidTime === newTime;
+    }
+
+
+const ROLE_SEQ_MAP = {
+  "総長": 100,
+  "副総長": 101,
+  "親衛隊長": 102,
+  "護衛隊長": 103,
+  "特攻隊長": 104,
+  "ケツ持ち": 105,
+  "旗持ち": 106,
+  "幹部": [107, 108, 109]  // 幹部は複数
+};
+/**************************************************
+ *  事前スキャン（役職対応＋一般メンバー対応 完全統合版）
+ **************************************************/
+async function scan(tid, enemy, startStr) {
+
+    // pre があるかどうかで分岐
+    const preJson = localStorage.getItem(`${KEYS.STRATEGY}${tid}`);
+    const pre = preJson ? JSON.parse(preJson) : null;
+
+    // 画面総数（公式）
+    const total = await getTotalCount(tid);
+
+    // forwardScan（実際に読み込んだID）
+    let current = await forwardScan(tid, total);
+
+    // 総数チェック（初回・差分共通）
+    if (current.length !== total) {
+        pushWarLog("ERROR", {
+            where: "scan",
+            detail: `総数不一致 page=${total} scanned=${current.length}`
+        });
+        // ここで return しないのは最低限のデータ生成のため
+    }
+
+    /**********************************************
+     * ① 初回スキャン（pre が無い）
+     **********************************************/
+    if (!pre) {
+
+        // seq 初回付与
+        assignSeq(current);
+
+        // 欠番検出
+        const missing = detectMissingSeq(current);
+
+        // 欠番補正
+        if (missing.length > 0) {
+            current = await fixMissingSeq(tid, current, missing);
+        }
+
+        // 重複排除
+        current = mergeMembers(current);
+
+        // 整合性チェック（一般のみ）
+        const integrity = validateSeqIntegrity(current);
+
+        // 保存（pre データ）
+        savePreScanResult(tid, enemy, startStr, current);
+
+        // ログ
+        logPreScanSummary(tid, total, current, missing, integrity);
+
+        // 初回はここで終了（finalScan が後で呼ばれる）
+        return current;
+    }
+
+    /**********************************************
+     * ② 差分スキャン（pre がある）
+     **********************************************/
+    const preMap = new Map(pre.map(m => [m.id, m]));
+
+    // pre の最大 seq を取得（欠番あってもOK）
+    let maxSeq = 0;
+    for (const m of pre) {
+        if (typeof m.seq === "number" && m.seq > maxSeq) {
+            maxSeq = m.seq;
+        }
+    }
+    let nextSeq = maxSeq + 1;
+
+    const merged = [];
+
+    for (const m of current) {
+        if (preMap.has(m.id)) {
+            // 残留 → pre の seq/g をそのまま使う
+            merged.push(preMap.get(m.id));
+        } else {
+            // 新規加入 → seq/g を付与
+            merged.push({
+                id: m.id,
+                name: m.name,
+                lv: m.lv,
+                g: decideGTag(m.lv),
+                role: m.role ?? null,
+                seq: nextSeq++
+            });
+        }
+    }
+
+    // 脱退は merged に入らないだけでOK
+
+    /**********************************************
+     * C/D 統合（ファイナルアドジャスト）
+     **********************************************/
+    const adjusted = finalAdjustGroup(merged);
+
+    /**********************************************
+     * 攻撃用データ生成（groups + seqToId）
+     **********************************************/
+    const attackData = buildAttackData(adjusted);
+
+    /**********************************************
+     * 保存（確定データ＋攻撃用データ）
+     **********************************************/
+    localStorage.setItem(`${KEYS.STRATEGY}${tid}_final`, JSON.stringify(adjusted));
+    localStorage.setItem(`${KEYS.STRATEGY}${tid}_attackData`, JSON.stringify(attackData));
+
+    // ロックフラグ
+    const sid = localStorage.getItem(KEYS.ACTIVE_ID);
+    if (sid) {
+        localStorage.setItem(KEYS.FINAL_DONE, sid);
+    }
+
+    pushWarLog("STRATEGY_LOCKED", {
+        res: "ファイナルアドジャスト完了（確定データロック）",
+        count: adjusted.length
+    });
+
+    return adjusted;
+}
+
+/**************************************************
+ *  ページ総数取得
+ **************************************************/
+async function getTotalCount(tid) {
+    const url = `https://tantora.jp/team/member-list?team_id=${tid}`;
+    try {
+        const html = await fetch(url).then(r => r.text());
+        const m = html.match(/全(\d+)件中/);
+        return m ? Number(m[1]) : 0;
+    } catch (e) {
+        pushWarLog("ERROR", { where: "getTotalCount", detail: e.toString() });
+        return 0;
+    }
+}
+
+/**************************************************
+ *  順方向スキャン（役職＋一般）
+ **************************************************/
+async function forwardScan(tid, total) {
+    const baseUrl = `https://tantora.jp/team/member-list?team_id=${tid}`;
+    const pages = Math.ceil(total / 5);
+    const sleep = ms => new Promise(r => setTimeout(r, ms));
+
+    let roleMembers = [];
+    let generalMembers = [];
+
+    for (let p = 1; p <= pages; p++) {
+        const url = p === 1 ? baseUrl : `${baseUrl}&page=${p}`;
+        const html = await fetchPageHtml(url);
+
+        const blocks = splitMemberBlocks(html);
+
+        for (const block of blocks) {
+            const roleName = extractRoleName(block); // 総長/副総長/幹部/…/null
+            const id = extractId(block);
+            const name = extractName(block);
+            const lv = extractLv(block);
+            const g = decideGTag(lv);
+
+            if (!id || !name || !lv) continue;
+
+            if (roleName) {
+                // 役職者
+                roleMembers.push({
+                    id, name, lv, g,
+                    role: roleName,
+                    seq: null,
+                    fixStage: 0,
+                    fixReason: null
+                });
+            } else {
+                // 一般メンバー
+                generalMembers.push({
+                    id, name, lv, g,
+                    role: null,
+                    seq: null,
+                    fixStage: 0,
+                    fixReason: null
+                });
+            }
+        }
+
+        await sleep(400);
+    }
+
+    return [...roleMembers, ...generalMembers];
+}
+
+/**************************************************
+ *  HTML取得
+ **************************************************/
+async function fetchPageHtml(url) {
+    try {
+        return await fetch(url).then(r => r.text());
+    } catch (e) {
+        pushWarLog("ERROR", { where: "fetchPageHtml", detail: e.toString() });
+        return "";
+    }
+}
+
+/**************************************************
+ *  メンバーブロック抽出
+ **************************************************/
+function splitMemberBlocks(html) {
+    const blocks = [];
+    const re = /<div class="common-info-bg[12]">([\s\S]*?)<\/div>/g;
+    let m;
+    while ((m = re.exec(html)) !== null) {
+        blocks.push(m[1]);
+    }
+    return blocks;
+}
+
+/**************************************************
+ *  役職名抽出
+ **************************************************/
+function extractRoleName(block) {
+    const m = block.match(/<span[^>]*color:\s*#ff0a00[^>]*>([^<]+)<\/span>/);
+    return m ? m[1].trim() : null;
+}
+
+/**************************************************
+ *  ID / 名前 / LV 抽出
+ **************************************************/
+function extractId(block) {
+    const m = block.match(/other_id=(\d+)/);
+    return m ? m[1] : null;
+}
+
+function extractName(block) {
+    const m = block.match(/player\?other_id=\d+">([^<]+)<\/a>/);
+    return m ? decodeHtml(m[1].trim()) : null;
+}
+
+function extractLv(block) {
+    const m = block.match(/LV:(\d+)/);
+    return m ? parseInt(m[1]) : null;
+}
+
+/**************************************************
+ *  gタグ決定（暫定）
+ **************************************************/
+function decideGTag(lv) {
+    if (lv >= 2000) return 'A';
+    if (lv >= 1500) return 'B';
+    if (lv >= 1000) return 'C';
+    return 'D';
+}
+
+function decodeHtml(str) {
+    return str
+        .replace(/&amp;/g, '&')
+        .replace(/&lt;/g, '<')
+        .replace(/&gt;/g, '>')
+        .replace(/&#39;/g, "'")
+        .replace(/&quot;/g, '"');
+}
+
+/**************************************************
+ *  seq 付与（役職は役職名、一般は1〜N）
+ **************************************************/
+function assignSeq(members) {
+    let generalSeq = 1;              // 一般は 1〜50
+    let kanbuIndex = 0;              // 幹部の順番管理
+
+    for (const m of members) {
+
+        // 一般メンバー
+        if (!m.role) {
+            m.seq = generalSeq++;
+            continue;
+        }
+
+        // 幹部（複数）
+        if (m.role === "幹部") {
+            const seq = ROLE_SEQ_MAP["幹部"][kanbuIndex++];
+            m.seq = seq ?? null;     // 4人目以降は null でも弾いてもOK
+            continue;
+        }
+
+        // 単一役職（総長〜旗持ち）
+        const seq = ROLE_SEQ_MAP[m.role];
+        m.seq = seq ?? null;         // 未定義の役職なら null
+    }
+}
+
+/**************************************************
+ *  欠番検出（一般のみ）
+ **************************************************/
+function detectMissingSeq(members) {
+    const seqSet = new Set(
+        members.filter(m => !m.role).map(m => m.seq)
+    );
+
+    const maxSeq = Math.max(...seqSet, 0);
+    const missing = [];
+
+    for (let i = 1; i <= maxSeq; i++) {
+        if (!seqSet.has(i)) missing.push(i);
+    }
+
+    return missing;
+}
+
+/**************************************************
+ *  欠番補正（一般のみ）
+ **************************************************/
+async function fixMissingSeq(tid, members, missingSeq) {
+    const manual = [];
+
+    for (const seq of missingSeq) {
+        const r1 = await tryFixSeq(tid, seq, 1);
+        if (r1.success) {
+            members.push(r1.member);
+            continue;
+        }
+
+        const r2 = await tryFixSeq(tid, seq, 2);
+        if (r2.success) {
+            members.push(r2.member);
+            continue;
+        }
+
+        manual.push(seq);
+    }
+
+    for (const seq of manual) {
+        const m = await manualFixSeq(seq);
+        if (m) members.push(m);
+    }
+
+    return members;
+}
+
+/**************************************************
+ *  seq→ページ変換
+ **************************************************/
+function calcPageFromSeq(seq) {
+    return {
+        page: Math.ceil(seq / 5),
+        index: (seq - 1) % 5
+    };
+}
+
+/**************************************************
+ *  欠番補正（1回目/2回目）
+ **************************************************/
+async function tryFixSeq(tid, seq, attempt) {
+    const { page, index } = calcPageFromSeq(seq);
+    const baseUrl = `https://tantora.jp/team/member-list?team_id=${tid}`;
+    const url = page === 1 ? baseUrl : `${baseUrl}&page=${page}`;
+
+    const html = await fetchPageHtml(url);
+    const blocks = splitMemberBlocks(html);
+
+    if (!blocks[index]) return { success: false };
+
+    const block = blocks[index];
+    const id = extractId(block);
+    const name = extractName(block);
+    const lv = extractLv(block);
+    const g = decideGTag(lv);
+
+    if (!id || !name || !lv) return { success: false };
+
+    return {
+        success: true,
+        member: {
+            id, name, lv, g,
+            role: null,
+            seq,
+            tag: `${seq}${"'".repeat(attempt)}${g}`,
+            fixStage: attempt,
+            fixReason: "OK"
+        }
+    };
+}
+
+/**************************************************
+ *  手動補正
+ **************************************************/
+async function manualFixSeq(seq) {
+    const url = prompt(`${seq} のメンバーを取得できませんでした。\nプロフィールURLを入力してください。`);
+    if (!url) return null;
+
+    const id = url.match(/other_id=(\d+)/)?.[1];
+    if (!id) return null;
+
+    return {
+        id,
+        name: "UNKNOWN",
+        lv: 0,
+        g: "D",
+        role: null,
+        seq,
+        tag: `${seq}'''D`,
+        fixStage: 3,
+        fixReason: "MANUAL"
+    };
+}
+
+/**************************************************
+ *  重複排除
+ **************************************************/
+function mergeMembers(members) {
+    return [...new Map(members.map(m => [m.id, m])).values()];
+}
+
+/**************************************************
+ *  整合性チェック（一般のみ）
+ **************************************************/
+function validateSeqIntegrity(members) {
+    const seqSet = new Set(
+        members.filter(m => !m.role).map(m => m.seq)
+    );
+
+    const maxSeq = Math.max(...seqSet, 0);
+    const missing = [];
+
+    for (let i = 1; i <= maxSeq; i++) {
+        if (!seqSet.has(i)) missing.push(i);
+    }
+
+    return missing.length === 0;
+}
+
+
+
+/**************************************************
+ *  保存
+ **************************************************/
+function savePreScanResult(tid, enemy, startStr, members) {
+    localStorage.setItem(`${KEYS.STRATEGY}${tid}`, JSON.stringify(members));
+
+    const sid = buildSessionId(tid, startStr);
+    localStorage.setItem(KEYS.ACTIVE_ID, sid);
+    localStorage.setItem(KEYS.ACTIVE_TID, tid);
+
+    let store = {};
+    try { store = JSON.parse(localStorage.getItem(KEYS.WAR_SESSIONS) || "{}"); }
+    catch(e){ store = {}; }
+
+    if (!store[sid]) {
+        store[sid] = {
+            info: { tid, start: startStr, enemy },
+            logs: []
+        };
+    }
+
+    localStorage.setItem(KEYS.WAR_SESSIONS, JSON.stringify(store));
+}
+
+/**************************************************
+ *  ログ
+ **************************************************/
+function logPreScanSummary(tid, total, members, missing, integrity) {
+    pushWarLog("SCAN_COMPLETE", {
+        tid,
+        total,
+        count: members.length,
+        missing,
+        integrity
+    });
+}
+
+/**************************************************
+ *  ファイナルスキャン（初回 or 差分スキャン → 突入準備）
+ **************************************************/
+async function finalScan(tid, enemy, startStr) {
+    if (isFinalScanning) return;
+    isFinalScanning = true;
+
+    try {
+
+        /**********************************************
+         * 1. セッション一致確認
+         **********************************************/
+        const existingSid = localStorage.getItem(KEYS.ACTIVE_ID);
+        const same = isSameSession(existingSid, tid, startStr);
+
+        if (!same) {
+            pushWarLog("INFO", {
+                res: "別抗争検出 → 初回スキャンに戻る",
+                oldSid: existingSid,
+                newTid: tid,
+                newStart: startStr
+            });
+
+            await scan(tid, enemy, startStr);
+            return;
+        }
+
+        /**********************************************
+         * 2. 通常のファイナルスキャン
+         **********************************************/
+        await scan(tid, enemy, startStr);
+
+        /**********************************************
+         * 3. 抗争突入準備へ移行
+         **********************************************/
+        scheduleWarEntry(tid, startStr);
+
+    } catch (e) {
+        pushWarLog("ERROR", { where: "finalScan", detail: e.toString() });
+
+    } finally {
+        isFinalScanning = false;
+    }
+}
+
+/**************************************************
+ *  ファイナルスキャン予約（/my* トリガー方式・統合版）
+ **************************************************/
+let __finalScanExecuted = false;
+
+function scheduleFinalScan(tid, enemy, startStr) {
+    const warDate = parseWarDate(startStr);
+    if (!warDate) return;
+
+    // 予約情報を保存
+    const payload = {
+        tid,
+        enemy,
+        startStr,
+        warTime: warDate.getTime()
+    };
+    localStorage.setItem("tantora_final_schedule", JSON.stringify(payload));
+
+    pushWarLog("INFO", {
+        res: "ファイナルスキャン予約（/my* トリガー方式）",
+        warTime: warDate.toLocaleString()
+    });
+
+    /**************************************************
+     *  /my* に入ったときに実行する処理をここで定義
+     **************************************************/
+    document.addEventListener("DOMContentLoaded", async () => {
+        if (!location.pathname.startsWith("/my")) return;
+
+        const raw = localStorage.getItem("tantora_final_schedule");
+        if (!raw) return;
+
+        let info;
+        try { info = JSON.parse(raw); } catch { return; }
+
+        const { tid, enemy, startStr, warTime } = info;
+        const now = Date.now();
+        const fifteenMin = 15 * 60 * 1000;
+        const twentySec = 20 * 1000;
+
+        // 時間窓チェック
+        if (now < warTime - fifteenMin) return;
+        if (now > warTime - twentySec) return;
+
+        // FINAL_DONE が一致していれば実行不要
+        const sid = localStorage.getItem(KEYS.ACTIVE_ID);
+        const done = localStorage.getItem(KEYS.FINAL_DONE);
+        if (sid && done && sid === done) return;
+
+        // 同一セッションで1回だけ
+        if (__finalScanExecuted) return;
+        __finalScanExecuted = true;
+
+        pushWarLog("INFO", { res: "my* トリガー → ファイナルスキャン実行" });
+
+        await finalScan(tid, enemy, startStr);
+    });
+}
+/**************************************************
+ *  抗争突入準備（開始2秒前から 400ms 間隔で突入）
+ **************************************************/
+function scheduleWarEntry(tid, startStr) {
+    if (isEnteringWar) return;
+    isEnteringWar = true;
+
+    const warDate = parseWarDate(startStr);
+    if (!warDate) {
+        pushWarLog("ERROR", { where: "scheduleWarEntry", detail: "開始日時パース失敗" });
+        return;
+    }
+
+    const targetTime = warDate.getTime() - 2000; // 開始2秒前
+
+    const waitUntil2secBefore = () => {
+        const nowTime = now().getTime();
+        if (nowTime < targetTime) {
+            // まだ早い → 500ms後に再チェック
+            warEntryTimer = setTimeout(waitUntil2secBefore, 500);
+            return;
+        }
+        // ここから突入リトライ開始
+        tryEnterWar();
+    };
+
+    const tryEnterWar = () => {
+        // すでに war/member-list に入れているか？
+        if (location.pathname.includes("/war/member-list")) {
+            pushWarLog("INFO", { res: "抗争画面突入成功 → ロギング開始" });
+            startWarLogging();
+            return;
+        }
+
+        // まだ入れていない → 400ms 間隔で突入を試みる
+        location.href = `https://tantora.jp/war/member-list?team_id=${tid}`;
+        warEntryTimer = setTimeout(tryEnterWar, 400);
+    };
+
+    pushWarLog("INFO", {
+        res: "抗争突入準備開始",
+        target: new Date(targetTime).toLocaleString()
+    });
+
+    waitUntil2secBefore();
+}
+
+/**************************************************
+ *  fetch パッチ（裏側通信のみロギング）
+ **************************************************/
+function patchFetchForLogging() {
+    if (window.__fetch_patched__) return; // 二重パッチ防止
+    window.__fetch_patched__ = true;
+
+    const originalFetch = window.fetch;
+
+    window.fetch = async (...args) => {
+        const res = await originalFetch(...args);
+
+        try {
+            const url = args[0]?.toString() || "";
+
+            // 抗争関連通信のみログ対象
+            if (url.includes("/war/")) {
+                const clone = res.clone();
+                clone.text().then(text => {
+                    // 画面に表示される情報はログ対象外
+                    // → ここでは裏側通信（レスポンス全文）を保存
+                    pushWarLog("FETCH_RES", {
+                        url,
+                        res: text
+                    });
+                });
+            }
+        } catch (e) {
+            pushWarLog("ERROR", { where: "fetchPatch", detail: e.toString() });
+        }
 
         return res;
-      };
-    })();
+    };
+}
 
-// ============================================================
-    //  HTML解析 → 状態更新
-    // ============================================================
-    function analyzeHtmlAndUpdateState(html) {
-      const hospitalized = html.includes("<blink>入院中</blink>");
+/**************************************************
+ *  抗争画面突入後のロギング開始
+ **************************************************/
+function startWarLogging() {
+    pushWarLog("INFO", { res: "ロギングモード開始（抗争中）" });
 
-      let hpNow = null,
-        hpMax = null;
-      const hpMatch1 = html.match(/HP[:：](\d+)\/(\d+)/);
-      if (hpMatch1) {
-        hpNow = parseInt(hpMatch1[1], 10);
-        hpMax = parseInt(hpMatch1[2], 10);
-      } else {
-        const hpMatch2 = html.match(
-          /icon_hp\.png[\s\S]*?(\d+)\/(\d+)\s*<\/div>/
+    // fetch パッチを適用（1回だけ）
+    patchFetchForLogging();
+
+    // 抗争終了検知を定期実行
+    setInterval(checkWarEnd, 3000);
+}
+
+/**************************************************
+ *  抗争終了画面の終了日時を抽出
+ *  例: 【抗争終了日時】11/09 20:11
+ **************************************************/
+function parseWarEndDate(html) {
+    const m = html.match(/抗争終了日時】(\d{2})\/(\d{2})\s(\d{2}):(\d{2})/);
+    if (!m) return null;
+
+    const nowYear = now().getFullYear();
+    const month = parseInt(m[1]);
+    const day = parseInt(m[2]);
+    const hour = parseInt(m[3]);
+    const min = parseInt(m[4]);
+
+    return new Date(nowYear, month - 1, day, hour, min);
+}
+
+/**************************************************
+ *  開始日時と終了日時の整合性チェック
+ *  0時跨ぎ・年跨ぎにも対応
+ **************************************************/
+function isSameWarSession(startDate, endDate) {
+    if (!startDate || !endDate) return false;
+
+    // 0時跨ぎ補正
+    if (endDate < startDate) {
+        endDate = new Date(
+            endDate.getFullYear(),
+            endDate.getMonth(),
+            endDate.getDate() + 1,
+            endDate.getHours(),
+            endDate.getMinutes()
         );
-        if (hpMatch2) {
-          hpNow = parseInt(hpMatch2[1], 10);
-          hpMax = parseInt(hpMatch2[2], 10);
-        }
-      }
-
-      let stNow = null,
-        stMax = null;
-      const stMatch = html.match(/体力[\s\S]*?(\d+)\/(\d+)/);
-      if (stMatch) {
-        stNow = parseInt(stMatch[1], 10);
-        stMax = parseInt(stMatch[2], 10);
-      }
-
-      let spNow = null,
-        spMax = null;
-      const spMatch = html.match(/気合[\s\S]*?(\d+)\/(\d+)/);
-      if (spMatch) {
-        spNow = parseInt(spMatch[1], 10);
-        spMax = parseInt(spMatch[2], 10);
-      }
-
-      state.lastStatus = {
-        hpNow,
-        hpMax,
-        stNow,
-        stMax,
-        spNow,
-        spMax,
-        hospitalized
-      };
-
-      handleStSpAutoRecovery();
-
-      if (hospitalized && state.phase === "IDLE") {
-        log("HOSPITALIZED: Start repair/heal sequence.");
-        if (state.repairEnabled) runRepairSequence();
-        else runHealSequence();
-      }
     }
 
-    // ============================================================
-    //  ST/SP 自動回復
-    // ============================================================
-    function handleStSpAutoRecovery() {
-      const { stNow, spNow } = state.lastStatus;
-
-      if (
-        typeof stNow === "number" &&
-        stNow <= state.stConfig.threshold &&
-        state.stConfig.itemId
-      ) {
-        const url = `/use-item-exec?item_id=${encodeURIComponent(
-          state.stConfig.itemId
-        )}`;
-        fetch(url, { method: "GET", credentials: "include" })
-          .then(() =>
-            log(`ST HEAL: item=${state.stConfig.itemId}, ST=${stNow}`)
-          )
-          .catch(() => log("ST HEAL: request failed"));
-      }
-
-      if (
-        typeof spNow === "number" &&
-        spNow <= state.spConfig.threshold &&
-        state.spConfig.itemId
-      ) {
-        const url = `/use-item-exec?item_id=${encodeURIComponent(
-          state.spConfig.itemId
-        )}`;
-        fetch(url, { method: "GET", credentials: "include" })
-          .then(() =>
-            log(`SP HEAL: item=${state.spConfig.itemId}, SP=${spNow}`)
-          )
-          .catch(() => log("SP HEAL: request failed"));
-      }
-    }
-
-    // ============================================================
-    //  修理シーケンス
-    // ============================================================
-    function runRepairSequence() {
-      state.phase = "REPAIR";
-      const ifr = ensureHealIframe();
-      ifr.src = "https://tantora.jp/item/repair-confirm";
-
-      const timer = setInterval(() => {
-        if (!ifr.contentWindow) return;
-
-        let url;
-        try {
-          url = ifr.contentWindow.location.href;
-        } catch (_) {
-          return;
-        }
-        if (!url) return;
-
-        if (url.includes("/item/repair-confirm")) {
-          const d = ifr.contentDocument;
-          if (!d) return;
-          const repairBtn =
-            d.querySelector('input[type="submit"][value*="修理"]') ||
-            d.querySelector('button[type="submit"]') ||
-            d.querySelector('a[href*="repair-done"]') ||
-            d.querySelector('input[type="submit"]') ||
-            d.querySelector("button[type=submit]");
-          if (!repairBtn) return;
-
-          repairBtn.click();
-          log("REPAIR: start repairing.");
-          clearInterval(timer);
-
-          const timer2 = setInterval(() => {
-            let url2;
-            try {
-              url2 = ifr.contentWindow.location.href;
-            } catch (_) {
-              return;
-            }
-            if (!url2) return;
-
-            if (url2.includes("/item/repair-done")) {
-              log("REPAIR: done.");
-              clearInterval(timer2);
-              disposeHealIframe();
-              runHealSequence();
-            }
-          }, 200);
-          return;
-        }
-
-        if (!url.includes("/item/repair-confirm")) {
-          log("REPAIR: not required / error, skip.");
-          clearInterval(timer);
-          disposeHealIframe();
-          runHealSequence();
-        }
-      }, 200);
-    }
-
-    // ============================================================
-    //  回復シーケンス
-    // ============================================================
-    function runHealSequence() {
-      state.phase = "HEAL";
-      const ifr = ensureHealIframe();
-      const url = state.enemyTeamId
-        ? `https://tantora.jp/war/member-list/${encodeURIComponent(
-            state.enemyTeamId
-          )}`
-        : "https://tantora.jp/war/member-list";
-      ifr.src = url;
-
-      const timer = setInterval(() => {
-        const d = ifr.contentDocument;
-        if (!d) return;
-        if (!d.URL.includes("/war/member-list")) return;
-
-        let popup = d.querySelector(".popupWindowContents");
-        if (!popup) {
-          const healBtn =
-            d.querySelector('img[src*="footer_heal"]')?.parentElement || null;
-          if (healBtn) healBtn.click();
-          return;
-        }
-
-        popup = d.querySelector(".popupWindowContents");
-        if (!popup) return;
-
-        const radios = popup.querySelectorAll(
-          'input[name="select_preset_radio"]'
+    // 年跨ぎ補正（12月 → 1月）
+    if (startDate.getMonth() === 11 && endDate.getMonth() === 0) {
+        endDate = new Date(
+            startDate.getFullYear() + 1,
+            endDate.getMonth(),
+            endDate.getDate(),
+            endDate.getHours(),
+            endDate.getMinutes()
         );
-        const idx = { A: 0, B: 1, N: 2 }[state.equipMode] ?? 0;
-        if (radios[idx] && !radios[idx].checked) radios[idx].click();
-
-        // ★ HPアイテム一覧の取得
-const items = Array.from(
-  popup.querySelectorAll("li.itemHP")
-).map(li => {
-  const ps = li.querySelectorAll("p");
-  const name = ps[0]?.innerText || "";
-  const remainText = ps[2]?.innerText || "";
-  const remaining = parseInt(
-    (remainText.match(/残り(\d+)回/) || [])[1] || "0",
-    10
-  );
-  const isFull = name.includes("全回復");
-  return { name, remaining, isFull, element: li };
-});
-state.availableItems = items;
-
-// ★ Free or 指定アイテムで target を決定
-let target = null;
-if (state.targetHpName === "FREE") {
-  target =
-    items.find(i => i.isFull && i.remaining > 0) ||
-    items.find(i => !i.isFull && i.remaining > 0);
-} else {
-  target = items.find(
-    i => i.name.includes(state.targetHpName) && i.remaining > 0
-  );
-}
-
-// ★ front に items + autoSelectedItem を返す（UI 新仕様対応）
-window.parent.postMessage(
-  {
-    from: "tora-backend",
-    cmd: "backend-state",
-    payload: {
-      availableItems: items,
-      autoSelectedItem: target || null
-    }
-  },
-  "*"
-);
-
-// ★ target が無い場合は終了
-if (!target) {
-  clearInterval(timer);
-  disposeHealIframe();
-  state.phase = "IDLE";
-  log("HEAL: no HP items, give up.");
-  return;
-}
-
-// ★ target をクリックして回復実行
-target.element.click();
-clearInterval(timer);
-
-        const timer2 = setInterval(() => {
-          const d2 = ifr.contentDocument;
-          if (!d2) return;
-
-          const useBtn =
-            d2.querySelector("a.multi-form-submit") ||
-            d2.querySelector('input[type="submit"]');
-          if (!useBtn) return;
-
-          useBtn.click();
-          clearInterval(timer2);
-
-          if (target.isFull) {
-            log(`HEAL: full HP item used (${target.name}).`);
-            disposeHealIframe();
-            state.phase = "IDLE";
-            return;
-          }
-
-          setTimeout(() => {
-            const d3 = ifr.contentDocument;
-            const stillHospital =
-              d3 && d3.body && d3.body.innerHTML.includes("入院中");
-            if (stillHospital) {
-              log(
-                `HEAL: still hospitalized after normal item (${target.name}), retry.`
-              );
-              runHealSequence();
-            } else {
-              log(
-                `HEAL: HP recovered by normal item (${target.name}).`
-              );
-              disposeHealIframe();
-              state.phase = "IDLE";
-            }
-          }, 300);
-        }, 80);
-      }, 150);
     }
 
-// ============================================================
-    //  抗争終了検知（timeline 統合版）
-    // ============================================================
-    function detectWarEnd(html) {
-      if (state.warEnded || !state.session) return;
-      if (!html.includes("抗争終了")) return;
-
-      state.warEnded = true;
-      state.session.endAt = Date.now();
-      state.session.result = detectResult(html);
-
-      log(`SESSION: 抗争終了 → 結果: ${state.session.result}`);
-
-      // ★★★ timeline 統合（action + response） ★★★
-const timeline = [
-  ...state.logs.action.map(a => ({
-    type: "action",
-    time: a.time,
-    message: a.message
-  })),
-  ...state.logs.response.map(r => ({
-    type: "response",
-    time: r.time,
-    kind: r.kind,
-    url: r.url,
-    status: r.status,
-    size: r.size
-  }))
-].sort((a, b) => a.time - b.time);
-
-// ★★★ front へ送信（backend-session に統一） ★★★
-try {
-  window.parent.postMessage(
-    {
-      from: "tora-backend",
-      cmd: "backend-session",
-      payload: {
-        session: state.session,
-        logs: { timeline }
-      }
-    },
-    "*"
-  );
-} catch (_) {
-  // 送信失敗は無視
+    // 終了日時が開始日時より後なら同じ抗争
+    return endDate.getTime() >= startDate.getTime();
 }
 
-// ★★★ ログリセット ★★★
-state.session = null;
-state.logs.action = [];
-state.logs.response = [];
-}
+/**************************************************
+ *  抗争終了判定
+ **************************************************/
+function checkWarEnd() {
+    const raw = document.documentElement.innerHTML;
 
-function detectResult(html) {
-  if (html.includes("勝利")) return "WIN";
-  if (html.includes("敗北")) return "LOSE";
-  return "DRAW";
-}
+    // 終了日時を抽出
+    const endDate = parseWarEndDate(raw);
+    if (!endDate) return; // 終了画面ではない
 
-// デバッグ用
-window.__toraBackendState = state;
+    // 確定データの開始日時を取得
+    const sid = localStorage.getItem(KEYS.ACTIVE_ID);
+    if (!sid) return;
 
-log("Tora backend engine (guard+heal+session+timeline) initialized.");
-})();   // ★★★ backend IIFE はここで閉じる（正しい位置）
+    const tid = localStorage.getItem(KEYS.ACTIVE_TID);
+    const finalData = localStorage.getItem(`${KEYS.STRATEGY}${tid}_final`);
+    if (!finalData) return;
 
-// ============================================================
-//  ログビューア（timeline / front log）
-//  - URL に ?logviewer=1 が付いているときだけ起動
-// ============================================================
-(function initLogViewer() {
-  if (!location.search.includes("logviewer=1")) return;
+    // セッションIDから開始日時を復元
+    const parts = sid.split("_");
+    const compact = parts[1]; // MMDDHHmm
+    const mm = compact.slice(0, 2);
+    const dd = compact.slice(2, 4);
+    const HH = compact.slice(4, 6);
+    const MM = compact.slice(6, 8);
 
-  // ページの既存UIを邪魔しないように全画面オーバーレイで表示
-  const style = document.createElement("style");
-  style.textContent = `
-#tora-logviewer {
-  position: fixed;
-  top: 0;
-  left: 0;
-  width: 100%;
-  height: 100%;
-  background: #111;
-  color: #eee;
-  z-index: 999999;
-  font-family: monospace;
-  overflow: hidden;
-  display: flex;
-  flex-direction: column;
-}
-
-#tora-logviewer .tabs {
-  display: flex;
-  background: #222;
-  border-bottom: 1px solid #444;
-}
-
-#tora-logviewer .tabs button {
-  flex: 1;
-  padding: 12px;
-  background: #222;
-  color: #eee;
-  border: none;
-  font-size: 16px;
-}
-
-#tora-logviewer .tabs button.active {
-  background: #444;
-}
-
-#tora-logviewer .panel {
-  flex: 1;
-  overflow-y: auto;
-  padding: 10px;
-  display: none;
-}
-
-#tora-logviewer .panel.active {
-  display: block;
-}
-
-#tora-logviewer pre {
-  white-space: pre-wrap;
-  word-break: break-word;
-  font-size: 14px;
-}
-
-.session-item {
-  padding: 10px;
-  margin-bottom: 8px;
-  background: #222;
-  border: 1px solid #444;
-  cursor: pointer;
-}
-
-.session-item:hover {
-  background: #333;
-}
-
-.save-btn {
-  margin-top: 10px;
-  padding: 10px;
-  background: #0a84ff;
-  color: #fff;
-  border: none;
-  width: 100%;
-  font-size: 16px;
-  border-radius: 4px;
-}
-  `;
-  document.head.appendChild(style);
-
-  // メインUI
-  const root = document.createElement("div");
-  root.id = "tora-logviewer";
-  root.innerHTML = `
-    <div class="tabs">
-      <button id="tabBtnTimeline" class="active">抗争ログ</button>
-      <button id="tabBtnFront">フロントログ</button>
-    </div>
-
-    <div id="panelTimeline" class="panel active"></div>
-    <div id="panelFront" class="panel"></div>
-  `;
-  document.body.appendChild(root);
-
-  // タブ切り替え
-  const btnTimeline = document.getElementById("tabBtnTimeline");
-  const btnFront = document.getElementById("tabBtnFront");
-  const panelTimeline = document.getElementById("panelTimeline");
-  const panelFront = document.getElementById("panelFront");
-
-  function activate(tab) {
-    btnTimeline.classList.remove("active");
-    btnFront.classList.remove("active");
-    panelTimeline.classList.remove("active");
-    panelFront.classList.remove("active");
-
-    if (tab === "timeline") {
-      btnTimeline.classList.add("active");
-      panelTimeline.classList.add("active");
-    } else {
-      btnFront.classList.add("active");
-      panelFront.classList.add("active");
-    }
-  }
-
-  btnTimeline.addEventListener("click", () => activate("timeline"));
-  btnFront.addEventListener("click", () => activate("front"));
-
-})();
-
-// ============================================================
-//  Part B：抗争ログタブ（session_* 読み込み＋保存）
-// ============================================================
-(function setupTimelineTab() {
-  if (!location.search.includes("logviewer=1")) return;
-
-  const panel = document.getElementById("panelTimeline");
-
-  // session_* をすべて取得
-  function loadSessions() {
-    const keys = Object.keys(localStorage).filter(k =>
-      k.startsWith("session_")
+    const startDate = new Date(
+        now().getFullYear(),
+        parseInt(mm) - 1,
+        parseInt(dd),
+        parseInt(HH),
+        parseInt(MM)
     );
 
-    const list = keys
-      .map(k => {
-        try {
-          const data = JSON.parse(localStorage.getItem(k));
-          return {
-            key: k,
-            session: data.session,
-            timeline: data.timeline
-          };
-        } catch (_) {
-          return null;
-        }
-      })
-      .filter(Boolean)
-      .sort((a, b) => a.session.startAt - b.session.startAt); // 古い順
-
-    return list;
-  }
-
-  // 一覧描画
-  function renderSessionList() {
-    const sessions = loadSessions();
-    panel.innerHTML = "";
-
-    if (sessions.length === 0) {
-      panel.innerHTML = "<p>保存された抗争ログはありません。</p>";
-      return;
+    // 同じ抗争かどうか判定
+    if (!isSameWarSession(startDate, endDate)) {
+        return; // 別抗争の終了画面 → 無視
     }
 
-    sessions.forEach(item => {
-      const div = document.createElement("div");
-      div.className = "session-item";
-
-      const s = item.session;
-      const name = `${s.sessionId} ${s.enemyTeamName} ${s.result}`;
-
-      div.textContent = name;
-
-      div.addEventListener("click", () => {
-        renderTimeline(item);
-      });
-
-      panel.appendChild(div);
-    });
-  }
-
-  // timeline 表示
-  function renderTimeline(item) {
-    const { session, timeline } = item;
-
-    panel.innerHTML = "";
-
-    const title = document.createElement("div");
-    title.style.marginBottom = "10px";
-    title.textContent =
-      `${session.sessionId} ${session.enemyTeamName} ${session.result}`;
-    panel.appendChild(title);
-
-    const pre = document.createElement("pre");
-    pre.textContent = timeline
-      .map(t => {
-        if (t.type === "action") {
-          return `[${new Date(t.time).toLocaleTimeString()}] ACTION: ${t.message}`;
-        } else {
-          return `[${new Date(t.time).toLocaleTimeString()}] RESPONSE: ${t.kind} ${t.url} (status=${t.status}, size=${t.size})`;
-        }
-      })
-      .join("\n");
-
-    panel.appendChild(pre);
-
-    // 保存ボタン
-    const saveBtn = document.createElement("button");
-    saveBtn.className = "save-btn";
-    saveBtn.textContent = "この抗争ログを保存（.tlog）";
-
-    saveBtn.addEventListener("click", () => {
-      saveTimelineAsFile(item);
+    /**************************************************
+     *  抗争終了確定
+     **************************************************/
+    pushWarLog("INFO", {
+        res: "抗争終了を検知（確定）",
+        end: endDate.toLocaleString()
     });
 
-    panel.appendChild(saveBtn);
-  }
+    // 攻撃スクリプト停止フラグ
+    localStorage.setItem(KEYS.ATTACK_KILL, sid);
 
-  // .tlog 保存
-  function saveTimelineAsFile(item) {
-    const { session, timeline } = item;
+    // 状態初期化（次の抗争に備える）
+    isEnteringWar = false;
+    isFinalScanning = false;
+    isPreScanning = false;
+    finalScanTimer = null;
+    warEntryTimer = null;
 
-    const fileName =
-      `${session.sessionId}${session.enemyTeamName}${session.result}.tlog`;
-
-    const text = JSON.stringify(
-      {
-        session,
-        timeline
-      },
-      null,
-      2
-    );
-
-    const blob = new Blob([text], { type: "text/plain" });
-    const url = URL.createObjectURL(blob);
-
-    const a = document.createElement("a");
-    a.href = url;
-    a.download = fileName;
-    a.click();
-
-    URL.revokeObjectURL(url);
-
-    // 保存後は localStorage から削除
-    localStorage.removeItem(item.key);
-
-    // 再描画
-    renderSessionList();
-  }
-
-  // 初期表示
-  renderSessionList();
-})();
-
-// ============================================================
-//  Part C：フロントログタブ（リアルタイム表示＋20件制限）
-// ============================================================
-(function setupFrontLogTab() {
-  if (!location.search.includes("logviewer=1")) return;
-
-  const panel = document.getElementById("panelFront");
-  const LOG_KEY = "sneakyjs_front_log";
-  const MAX_LINES = 20;
-
-  // フロントログ読み込み
-  function loadFrontLog() {
-    try {
-      const logs = JSON.parse(localStorage.getItem(LOG_KEY) || "[]");
-      return Array.isArray(logs) ? logs : [];
-    } catch (_) {
-      return [];
-    }
-  }
-
-  // 20件制限（古いものから削除）
-  function trimLogs(logs) {
-    if (logs.length <= MAX_LINES) return logs;
-    return logs.slice(logs.length - MAX_LINES);
-  }
-
-  // 表示更新
-  function renderFrontLog() {
-    const logs = trimLogs(loadFrontLog());
-
-    panel.innerHTML = "";
-
-    if (logs.length === 0) {
-      panel.innerHTML = "<p>フロントログはまだありません。</p>";
-      return;
-    }
-
-    const pre = document.createElement("pre");
-    pre.textContent = logs.join("\n");
-    panel.appendChild(pre);
-  }
-
-  // 1秒ごとに更新（リアルタイム確認用）
-  setInterval(renderFrontLog, 1000);
-
-  // 初期表示
-  renderFrontLog();
-})();
+    pushWarLog("INFO", { res: "攻撃スクリプト停止指示 → 状態初期化完了" });
+}
